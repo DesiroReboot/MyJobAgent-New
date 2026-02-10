@@ -1,6 +1,8 @@
-﻿import json
+import json
 import os
+import shutil
 import sqlite3
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -74,7 +76,22 @@ class ActivityWatchCollector:
         threshold_dt = datetime.now(timezone.utc) - timedelta(days=days)
         records: List[ActivityWatchRecord] = []
 
-        conn = sqlite3.connect(self.db_path)
+        # Copy DB to a temporary file to avoid locking issues (especially in Docker/Windows)
+        temp_dir = tempfile.gettempdir()
+        # Use a unique name to avoid collisions
+        temp_db_path = os.path.join(temp_dir, f"aw_copy_{os.getpid()}_{int(datetime.now().timestamp())}.db")
+        used_temp_copy = False
+        
+        try:
+            shutil.copy2(self.db_path, temp_db_path)
+            used_temp_copy = True
+            db_to_connect = temp_db_path
+        except Exception as e:
+            print(f"[Warning] Failed to copy ActivityWatch DB to temp file: {e}. Attempting to read original file directly.")
+            db_to_connect = self.db_path
+
+        conn = sqlite3.connect(db_to_connect)
+
         try:
             cursor = conn.cursor()
 
@@ -154,5 +171,11 @@ class ActivityWatchCollector:
                 )
         finally:
             conn.close()
+            # Clean up temp file if we created one
+            if used_temp_copy and os.path.exists(temp_db_path):
+                try:
+                    os.remove(temp_db_path)
+                except Exception as e:
+                    print(f"[Warning] Failed to remove temp DB file {temp_db_path}: {e}")
 
         return records

@@ -19,6 +19,14 @@ from config import AppConfig
 
 # 加载配置
 config = AppConfig.from_file('config.json')
+
+# 检查命令行参数
+import sys
+if '-test' in sys.argv:
+    print('[INFO] Running in TEST mode (Manual Trigger)')
+    # 这里其实已经是手动触发脚本了，所以主要就是个提示
+    # 如果未来test_llm.py也加入定时逻辑，这里可以用来跳过
+
 llm_config = config.llm_config()
 keyword_min = llm_config.get('keyword_min', 10)
 keyword_max = llm_config.get('keyword_max', 10)
@@ -65,6 +73,20 @@ load_dotenv('../.env', override=True)
 api_key = os.getenv('DASHSCOPE_API_KEY')
 model = 'qwen-max'
 base_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+
+if not api_key:
+    # 尝试从Config获取
+    key_map = {
+        "zhipu": "ZHIPU_API_KEY",
+        "doubao": "VOLCANO_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "openai_compat": "OPENAI_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "dashscope": "DASHSCOPE_API_KEY"
+    }
+    # 从config.llm provider推断，但这里写死了provider='dashscope'
+    # 为了保持test_llm的独立性，我们手动尝试获取
+    api_key = config.get_env('DASHSCOPE_API_KEY')
 
 print(f'Provider: dashscope')
 print(f'Model: {model}')
@@ -219,8 +241,8 @@ else:
         from pusher.feishu_pusher import FeishuPusher
         
         # 优先检查是否有 webhook，如果有则使用 bot 模式（最简单）
-        webhook_url = os.getenv("FEISHU_WEBHOOK_URL")
-        app_id = os.getenv("FEISHU_APP_ID")
+        webhook_url = config.get_env("FEISHU_WEBHOOK_URL")
+        app_id = config.get_env("FEISHU_APP_ID")
         
         try:
             if webhook_url:
@@ -231,15 +253,16 @@ else:
             elif app_id:
                 print('[INFO] Using Feishu App mode')
                 # 尝试获取 email 或 open_id 或 mobile
-                email = os.getenv("FEISHU_EMAIL")
-                open_id = os.getenv("FEISHU_OPEN_ID")
-                mobile = os.getenv("FEISHU_MOBILES")
+                email = config.get_env("FEISHU_EMAIL")
+                open_id = config.get_env("FEISHU_OPEN_ID")
+                mobile = config.get_env("FEISHU_MOBILES")
+                app_secret = config.get_env("FEISHU_APP_SECRET")
                 
                 if not email and not open_id and not mobile:
                      print('[WARNING] FEISHU_APP_ID is set but FEISHU_EMAIL, FEISHU_MOBILES or FEISHU_OPEN_ID is missing.')
                      print('          Please set one of them in .env to enable App push.')
                 else:
-                    pusher = FeishuPusher(mode="app", app_id=app_id, email=email, user_id=open_id, mobile=mobile)
+                    pusher = FeishuPusher(mode="app", app_id=app_id, app_secret=app_secret, email=email, user_id=open_id, mobile=mobile)
                     pusher.push_keywords(keywords)
                     print(f'[OK] Pushed to Feishu App (Target: {email or mobile or open_id})')
             else:

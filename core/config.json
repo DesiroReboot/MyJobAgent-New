@@ -1,17 +1,31 @@
 {
+  "schedule": {
+    "enabled": true,
+    "time": "23:25",
+    "days_to_analyze": 1
+  },
   "llm": {
     "provider": "dashscope",
     "api_key": "",
     "model": "qwen-max",
     "timeout": 60,
-    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "base_model": "dashscope",
     "base_url_examples": {
       "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "deepseek": "https://api.deepseek.com/v1",
       "doubao": "https://ark.cn-beijing.volces.com/api/v3"
     },
     "keyword_min": 10,
-    "keyword_max": 20
+    "keyword_max": 10
+  },
+  "env_vars": {
+    "DASHSCOPE_API_KEY": "",
+    "DEEPSEEK_API_KEY": "",
+    "VOLCANO_API_KEY": "",
+    "FEISHU_APP_ID": "",
+    "FEISHU_APP_SECRET": "",
+    "FEISHU_MOBILES": "",
+    "FEISHU_WEBHOOK_URL": ""
   },
   "collector": {
     "source": "activitywatch",

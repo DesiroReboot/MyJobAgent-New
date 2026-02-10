@@ -69,18 +69,14 @@ def ensure_output_path(path_str: str) -> str:
     return str(path)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="JobInsight Step 1 MVP")
-    parser.add_argument("--days", type=int, default=None, help="Days of data to analyze")
-    parser.add_argument("--config", type=str, default="config.json", help="Path to config.json")
-    args = parser.parse_args()
+import time
+import datetime
+from typing import Optional
 
-    load_env()
-
-    config_path = resolve_config_path(args.config)
-    config = AppConfig.from_file(str(config_path))
-
-    days = args.days if args.days is not None else config.collector_days(7)
+def run_analysis(config: AppConfig, days: int) -> int:
+    """Run the analysis pipeline once."""
+    print(f"[JobInsight] Starting analysis for past {days} days...")
+    
     source = config.collector_source("local")
     events = []
     if source == "activitywatch":
@@ -119,7 +115,29 @@ def main() -> int:
 
     llm_cfg = config.llm_config()
     provider = llm_cfg.get("provider", "zhipu")
-    api_key = resolve_api_key(provider, llm_cfg.get("api_key", ""))
+    
+    # Updated: use config.get_env to support config.json fallback
+    api_key_env = resolve_api_key(provider, llm_cfg.get("api_key", ""))
+    # If resolve_api_key returns empty (not in env), try getting from config via get_env logic if applicable
+    # Actually resolve_api_key checks specific env vars. We should update resolve_api_key or call get_env first.
+    # Let's update resolve_api_key to use config.get_env if we can pass config to it, or just do it here.
+    # For now, let's assume resolve_api_key logic handles standard envs. 
+    # But user wants generic config.json fallback.
+    # Let's fetch the key name based on provider and ask config.get_env
+    
+    key_map = {
+        "zhipu": "ZHIPU_API_KEY",
+        "doubao": "VOLCANO_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "openai_compat": "OPENAI_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "dashscope": "DASHSCOPE_API_KEY"
+    }
+    env_key = key_map.get(provider, "")
+    api_key = config.get_env(env_key) if env_key else ""
+    if not api_key:
+        api_key = resolve_api_key(provider, llm_cfg.get("api_key", "")) # Fallback to old logic or empty
+
     llm_client = create_llm_client(
         provider=provider,
         api_key=api_key,
@@ -135,11 +153,15 @@ def main() -> int:
         keywords = llm_client.extract_keywords(compressed_data, min_k=min_k, max_k=max_k)
     except Exception as e:
         print(f"[Step1] LLM call failed: {e}")
-        raise
+        # In scheduler mode, we might not want to raise, just log and return
+        return 1
     print(f"[Step1] Keywords extracted: {len(keywords)}")
 
     output_cfg = config.output_config()
-    wordcloud_file = ensure_output_path(output_cfg.get("wordcloud_file", "wordcloud.html"))
+    base_wc_file = output_cfg.get("wordcloud_file", "wordcloud.html")
+    # Append days to filename to distinguish reports
+    name_part, ext_part = os.path.splitext(base_wc_file)
+    wordcloud_file = ensure_output_path(f"{name_part}_{days}d{ext_part}")
 
     wc_generator = WordCloudGenerator()
     wc_generator.generate(keywords, wordcloud_file)
@@ -150,25 +172,26 @@ def main() -> int:
     # 优先使用配置的webhook
     if webhook_url:
         pusher = FeishuPusher(mode="bot", webhook_url=webhook_url)
-        pusher.push_keywords(keywords)
+        pusher.push_keywords(keywords, title_suffix=f" (Past {days} Days)")
         if feishu_account:
             print(f"[Step1] Feishu push sent (account: {feishu_account})")
         else:
             print("[Step1] Feishu push sent via Webhook")
     else:
         # 尝试使用App模式
-        app_id = os.getenv("FEISHU_APP_ID")
+        app_id = config.get_env("FEISHU_APP_ID")
         if app_id:
-            email = os.getenv("FEISHU_EMAIL")
-            open_id = os.getenv("FEISHU_OPEN_ID")
-            mobile = os.getenv("FEISHU_MOBILES")
+            email = config.get_env("FEISHU_EMAIL")
+            open_id = config.get_env("FEISHU_OPEN_ID")
+            mobile = config.get_env("FEISHU_MOBILES")
+            app_secret = config.get_env("FEISHU_APP_SECRET")
             
             if not email and not open_id and not mobile:
                  print('[Step1] FEISHU_APP_ID found but no target user (EMAIL/OPEN_ID/MOBILES). Skipping push.')
             else:
                 try:
-                    pusher = FeishuPusher(mode="app", app_id=app_id, email=email, user_id=open_id, mobile=mobile)
-                    pusher.push_keywords(keywords)
+                    pusher = FeishuPusher(mode="app", app_id=app_id, app_secret=app_secret, email=email, user_id=open_id, mobile=mobile)
+                    pusher.push_keywords(keywords, title_suffix=f" (Past {days} Days)")
                     print(f'[Step1] Feishu push sent via App (Target: {email or mobile or open_id})')
                 except Exception as e:
                     print(f"[Step1] Feishu App push failed: {e}")
@@ -177,6 +200,75 @@ def main() -> int:
 
     return 0
 
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="JobInsight Step 1 MVP")
+    parser.add_argument("--days", type=int, default=None, help="Days of data to analyze")
+    parser.add_argument("--config", type=str, default="config.json", help="Path to config.json")
+    parser.add_argument("-test", "--test", action="store_true", help="Run immediately (bypass scheduler)")
+    args = parser.parse_args()
+
+    load_env()
+
+    config_path = resolve_config_path(args.config)
+    config = AppConfig.from_file(str(config_path))
+    
+    schedule_cfg = config.schedule_config()
+    enabled = schedule_cfg.get("enabled", False)
+    
+    # Determine mode
+    if args.test or not enabled:
+        # Run immediately
+        days = args.days if args.days is not None else config.collector_days(7)
+        return run_analysis(config, days)
+    else:
+        # Run scheduler
+        target_time = schedule_cfg.get("time", "09:00")
+        days = schedule_cfg.get("days_to_analyze", 1) 
+        print(f"[JobInsight] Scheduler started. Will run daily at {target_time} (Dual Mode: 1-Day & 7-Day analysis).")
+        print(f"[JobInsight] Current Time (Container): {datetime.datetime.now().strftime('%H:%M:%S')}")
+        print("[JobInsight] Press Ctrl+C to exit.")
+        
+        while True:
+            try:
+                # Reload config to support hot-reloading without restart
+                # (Re-parsing config.json every loop is cheap and useful)
+                config = AppConfig.from_file(str(config_path))
+                schedule_cfg = config.schedule_config()
+                target_time = schedule_cfg.get("time", "09:00")
+                days = schedule_cfg.get("days_to_analyze", 1)
+                
+                now = datetime.datetime.now()
+                current_time = now.strftime("%H:%M")
+                
+                # Debug log every hour to show aliveness (optional)
+                if now.minute == 0 and now.second < 30:
+                     print(f"[JobInsight] Heartbeat: {current_time} (Target: {target_time})")
+
+                if current_time == target_time:
+                    print(f"[JobInsight] Triggering scheduled analysis at {current_time}...")
+                    
+                    # User Request: "give 1 day / 7 days push at the same time"
+                    # Run 1-day analysis
+                    print("[JobInsight] Running 1-day analysis...")
+                    run_analysis(config, 1)
+                    
+                    # Run 7-day analysis
+                    print("[JobInsight] Running 7-day analysis...")
+                    run_analysis(config, 7)
+                    
+                    # Sleep for 61 seconds to avoid double triggering
+                    time.sleep(61)
+                else:
+                    # Sleep for a bit
+                    time.sleep(30)
+            except KeyboardInterrupt:
+                print("\n[JobInsight] Scheduler stopped.")
+                break
+            except Exception as e:
+                print(f"[JobInsight] Scheduler error: {e}")
+                time.sleep(60)
+        return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

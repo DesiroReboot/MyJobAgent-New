@@ -132,7 +132,7 @@ class FeishuPusher:
         self.user_id = user_info["user_id"]
         return self.user_id
 
-    def push_keywords(self, keywords: Union[List[Dict], Dict[str, List]]) -> bool:
+    def push_keywords(self, keywords: Union[List[Dict], Dict[str, List]], title_suffix: str = "") -> bool:
         """
         Push extracted keywords to Feishu.
         Supports both legacy list format and new structured dict format.
@@ -149,7 +149,7 @@ class FeishuPusher:
             tools = keywords.get("tools_platforms", [])
             
             content_lines = [
-                f"📊 **User Interest Analysis Report**",
+                f"📊 **User Interest Analysis Report{title_suffix}**",
                 f"🕒 Time: {current_time}",
                 "",
                 "🎯 **Skills & Interests (The What)**"
@@ -175,7 +175,7 @@ class FeishuPusher:
         else:
             # Legacy list format
             content_lines = [
-                f"📊 **User Interest Analysis Report**",
+                f"📊 **User Interest Analysis Report{title_suffix}**",
                 f"🕒 Time: {current_time}",
                 "",
                 "🔑 **Top Keywords**"

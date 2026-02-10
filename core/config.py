@@ -1,3 +1,4 @@
+import os
 import json
 from pathlib import Path
 from typing import Dict, Tuple
@@ -45,6 +46,11 @@ class AppConfig:
         return self.resolve_path(self.section("collector").get("db_path", default))
 
     def collector_aw_db_path(self, default: str = "") -> str:
+        # Priority: Env Var > Config
+        env_path = os.environ.get("COLLECTOR_AW_DB_PATH")
+        if env_path:
+            return env_path
+            
         path = self.section("collector").get("aw_db_path", default)
         if not path:
             return ""
@@ -67,7 +73,41 @@ class AppConfig:
         return self.resolve_path(self.section("collector").get("log_file", default))
 
     def llm_config(self) -> Dict:
-        return self.section("llm")
+        llm = self.section("llm")
+        base_model = llm.get("base_model", "dashscope")
+        base_url_examples = llm.get("base_url_examples", {})
+        
+        # Resolve base_url from base_model if not explicitly set (or if we strictly use base_model)
+        # User requested: base_url -> base_model logic
+        if base_model in base_url_examples:
+            llm["base_url"] = base_url_examples[base_model]
+        
+        return llm
+
+    def schedule_config(self) -> Dict:
+        return self.section("schedule")
+
+    def env_vars(self) -> Dict:
+        return self.section("env_vars")
+
+    def get_env(self, key: str, default: str = "") -> str:
+        # Priority: .env (os.environ) > config.json (env_vars section)
+        # OR as user requested: "choose one from config.json and .env"
+        # We'll prioritize os.environ (which comes from .env or system), 
+        # then fall back to config.json
+        
+        # Check os.environ first
+        val = os.environ.get(key)
+        if val:
+            return val
+            
+        # Check config.json env_vars section
+        env_vars = self.env_vars()
+        val = env_vars.get(key)
+        if val:
+            return str(val)
+            
+        return default
 
     def output_config(self) -> Dict:
         return self.section("output")
