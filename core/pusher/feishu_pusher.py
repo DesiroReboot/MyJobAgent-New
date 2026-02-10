@@ -2,7 +2,8 @@
 import os
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
+from datetime import datetime
 
 import requests
 
@@ -131,22 +132,64 @@ class FeishuPusher:
         self.user_id = user_info["user_id"]
         return self.user_id
 
-    def push_keywords(self, keywords: List[Dict]) -> bool:
+    def push_keywords(self, keywords: Union[List[Dict], Dict[str, List]]) -> bool:
         """
-        推送关键词到飞书
-
-        Args:
-            keywords: 关键词列表，每项包含 name 和 weight/final_weight
-
-        Returns:
-            bool: 推送是否成功
+        Push extracted keywords to Feishu.
+        Supports both legacy list format and new structured dict format.
         """
-        text = self._format_keywords(keywords)
+        if not keywords:
+            return False
+
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Prepare message content based on structure
+        if isinstance(keywords, dict) and ("skills_interests" in keywords or "tools_platforms" in keywords):
+            # New structured format
+            skills = keywords.get("skills_interests", [])
+            tools = keywords.get("tools_platforms", [])
+            
+            content_lines = [
+                f"📊 **User Interest Analysis Report**",
+                f"🕒 Time: {current_time}",
+                "",
+                "🎯 **Skills & Interests (The What)**"
+            ]
+            
+            if skills:
+                for i, kw in enumerate(skills, 1):
+                    content_lines.append(f"{i}. {kw['name']} (Weight: {kw['weight']:.2f})")
+            else:
+                content_lines.append("No significant skills detected.")
+                
+            content_lines.append("")
+            content_lines.append("🛠️ **Tools & Platforms (The Via)**")
+            
+            if tools:
+                for i, kw in enumerate(tools, 1):
+                    content_lines.append(f"{i}. {kw['name']} (Weight: {kw['weight']:.2f})")
+            else:
+                content_lines.append("No significant tools detected.")
+                
+            text_content = "\n".join(content_lines)
+            
+        else:
+            # Legacy list format
+            content_lines = [
+                f"📊 **User Interest Analysis Report**",
+                f"🕒 Time: {current_time}",
+                "",
+                "🔑 **Top Keywords**"
+            ]
+            
+            for i, kw in enumerate(keywords, 1):
+                content_lines.append(f"{i}. {kw['name']} (Weight: {kw['weight']:.2f})")
+                
+            text_content = "\n".join(content_lines)
 
         if self.mode == "bot":
-            return self._push_as_bot(text)
+            return self._push_as_bot(text_content)
         else:
-            return self._push_as_app(text)
+            return self._push_as_app(text_content)
 
     def _push_as_bot(self, text: str) -> bool:
         """使用群机器人推送消息"""

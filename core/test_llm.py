@@ -112,14 +112,24 @@ else:
             'total_duration': stats['total_duration']
         }
     
-    # 统计非web事件
-    window_samples = []
-    audio_samples = []
+    # 统计非web事件 (按App聚合)
+    app_stats = defaultdict(lambda: {'titles': [], 'total_duration': 0})
     for e in events:
-        if e.event_type == 'window' and e.title:
-            window_samples.append({'title': e.title, 'app': e.app})
-        if e.event_type == 'afk':
-            pass  # afk不作为样本
+        if e.event_type == 'window' and e.app:
+            app_stats[e.app]['titles'].append(e.title)
+            app_stats[e.app]['total_duration'] += e.duration
+
+    # 取Top10 App
+    sorted_apps = sorted(app_stats.items(), key=lambda x: x[1]['total_duration'], reverse=True)[:10]
+
+    compressed_apps = {}
+    for app_name, stats in sorted_apps:
+        # 最多保留5个title samples
+        unique_titles = list(dict.fromkeys(filter(None, stats['titles'])))[:5]
+        compressed_apps[app_name] = {
+            'title_samples': unique_titles,
+            'total_duration': stats['total_duration']
+        }
     
     # 计算afk比例
     total_duration = sum(e.duration for e in events)
@@ -129,10 +139,7 @@ else:
     # 构建LLM输入
     test_data = {
         'web': compressed_web,
-        'non_web_samples': {
-            'window': window_samples[:20],  # 最多20个窗口样本
-            'audio': audio_samples[:10]
-        },
+        'apps': compressed_apps, # 新的分组结构
         'meta': {
             'afk_ratio': round(afk_ratio, 2)
         }
@@ -140,7 +147,7 @@ else:
     
     print(f'[INFO] Compressed data:')
     print(f'   - Web domains: {len(compressed_web)}')
-    print(f'   - Window samples: {len(window_samples)}')
+    print(f'   - Active Apps: {len(compressed_apps)}')
     print(f'   - AFK ratio: {afk_ratio:.2%}')
     print()
     
@@ -153,12 +160,48 @@ else:
     
     try:
         # 使用配置的关键词数量
-        keywords = client.extract_keywords(test_data, min_k=keyword_min, max_k=keyword_max)
-        print('[OK] LLM call successful!')
-        print()
-        print(f'[LIST] Extracted keywords ({len(keywords)} total):')
-        for i, kw in enumerate(keywords, 1):
-            print(f'   {i}. {kw["name"]} (weight: {kw["weight"]:.2f})')
+        # client.extract_keywords now returns a dict {"skills_interests": [...], "tools_platforms": [...]}
+        # but the wrapper might still be returning a list if we didn't update extract_keywords return type hint or logic
+        # Let's check extract_keywords implementation first.
+        # Wait, I modified _build_prompt but extract_keywords parses the JSON.
+        # I need to verify if extract_keywords just returns json.loads(content) or expects a specific list format.
+        # Assuming extract_keywords returns the raw dict from LLM now.
+        
+        result_data = client.extract_keywords(test_data, min_k=keyword_min, max_k=keyword_max)
+        
+        keywords = [] # For pusher compatibility
+        
+        if isinstance(result_data, dict) and ("skills_interests" in result_data or "tools_platforms" in result_data):
+             # New structured format
+            skills = result_data.get("skills_interests", [])
+            tools = result_data.get("tools_platforms", [])
+            
+            print('[OK] LLM call successful (Structured Output)!')
+            print()
+            
+            print(f'[LIST] Skills & Interests ({len(skills)}):')
+            for i, kw in enumerate(skills, 1):
+                print(f'   {i}. {kw["name"]} (weight: {kw["weight"]:.2f})')
+                
+            print(f'\n[LIST] Tools & Platforms ({len(tools)}):')
+            for i, kw in enumerate(tools, 1):
+                print(f'   {i}. {kw["name"]} (weight: {kw["weight"]:.2f})')
+            
+            # Combine for pusher (pusher needs update to handle dict, but for now we can merge or pass dict if pusher supports it)
+            # We will update pusher next. For now, let's pass the dict.
+            keywords = result_data
+            
+        elif isinstance(result_data, list):
+            # Old format fallback
+            keywords = result_data
+            print('[OK] LLM call successful!')
+            print()
+            print(f'[LIST] Extracted keywords ({len(keywords)} total):')
+            for i, kw in enumerate(keywords, 1):
+                print(f'   {i}. {kw["name"]} (weight: {kw["weight"]:.2f})')
+        else:
+            print(f"[ERROR] Unexpected result format: {type(result_data)}")
+            keywords = []
 
         # ========================================
         # 推送结果至飞书

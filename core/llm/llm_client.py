@@ -13,19 +13,36 @@ class LLMClient:
         self.timeout = timeout
         self.base_url = base_url.rstrip("/")
 
-    def extract_keywords(self, compressed_data: Dict, min_k: int = 3, max_k: int = 5) -> List[Dict]:
+    def extract_keywords(self, compressed_data: Dict, min_k: int = 3, max_k: int = 5) -> Dict:
+        """
+        Extract keywords from compressed data using LLM.
+        Returns a dict with 'skills_interests' and 'tools_platforms' keys, 
+        or a legacy list of dicts if LLM fails to structure it (or falls back).
+        """
         prompt = self._build_prompt(compressed_data, min_k, max_k)
-        text = self._call_llm(prompt)
-        parsed = self._parse_keywords(text)
-        if parsed:
-            # Sort by weight descending
-            parsed.sort(key=lambda x: x.get("weight", 0), reverse=True)
+        try:
+            text = self._call_llm(prompt)
+            parsed = self._parse_keywords(text)
             
-            if len(parsed) > max_k:
-                return parsed[:max_k]
-            if len(parsed) >= min_k:
-                return parsed
-        return self._rule_based_keywords(compressed_data, min_k, max_k)
+            if parsed:
+                # If parsed is a dict (new structure), return it directly
+                if isinstance(parsed, dict) and ("skills_interests" in parsed or "tools_platforms" in parsed):
+                    return parsed
+                
+                # If parsed is a list (legacy structure), return it
+                if isinstance(parsed, list) and len(parsed) >= min_k:
+                    # Sort legacy list
+                    parsed.sort(key=lambda x: x.get("weight", 0), reverse=True)
+                    if len(parsed) > max_k:
+                        return parsed[:max_k]
+                    return parsed
+                    
+        except Exception as e:
+            print(f"[WARNING] LLM extraction failed: {e}")
+            
+        # Fallback to rule-based
+        fallback = self._rule_based_keywords(compressed_data, min_k, max_k)
+        return fallback
 
     def _call_llm(self, prompt: str) -> str:
         if not self.api_key:
@@ -77,51 +94,73 @@ class LLMClient:
     def _build_prompt(compressed_data: Dict, min_k: int, max_k: int) -> str:
         data_preview = json.dumps(compressed_data, ensure_ascii=False, indent=2)[:8000]
         return (
-            "You will be given compressed local activity data. "
-            "The 'web' section contains domains with title samples and durations from browser history. "
-            "The 'non_web_samples' section contains window/audio samples. "
-            "The 'meta' section includes afk_ratio (do not exclude on afk). "
-            "Extract job-related keywords that best summarize the user's interests. "
-            f"Return {min_k}-{max_k} keywords. "
-            "Return JSON only in the form: {\"keywords\": [{\"name\": str, \"weight\": float}]}. "
-            "Weights should be between 0 and 1.\n\n"
+            "You are an expert career counselor. Analyze the provided user activity data to identify professional skills and interests.\n"
+            "The data is grouped into 'web' (browser history) and 'apps' (active applications).\n\n"
+            "**Goal**: Extract high-quality insights, STRICTLY separating 'Content/Skills' (The What) from 'Tools/Platforms' (The Via).\n\n"
+            "**Inference Logic (Contextual Analysis)**:\n"
+            "- **For Apps**: The 'App Name' is the Tool. The 'Window Titles' reveal the Skill/Content.\n"
+            "  - Example: App='Visual Studio Code', Title='main.py' -> Skill='Python Development', Tool='Visual Studio Code'.\n"
+            "  - Example: App='PowerPoint', Title='Q3 Report' -> Skill='Business Reporting', Tool='PowerPoint'.\n"
+            "- **For Web**: The 'Domain' is the Platform/Tool. The 'Titles' reveal the Interest/Skill.\n"
+            "  - Example: Domain='github.com', Title='react-repo' -> Skill='React', Tool='GitHub'.\n\n"
+            "**Categories**:\n"
+            "1. **Skills & Interests (The What)**: Technical concepts, programming languages, fields of study, or job roles.\n"
+            "   - EXAMPLES: 'Python', 'Data Analysis', 'Workflow Automation', 'Machine Learning', 'Product Management'\n"
+            "2. **Tools & Platforms (The Via)**: Software applications, websites, browsers, or services used to perform the activity.\n"
+            "   - EXAMPLES: 'Visual Studio Code', 'GitHub', 'BOSS直聘', '知乎', 'n8n.io', 'Chrome', 'Feishu'\n\n"
+            "**Rules**:\n"
+            "1. **Ignore Noise**: Strictly ignore system process names (e.g., 'exe', 'msedge', 'cmd') and generic terms (e.g., 'Home', 'Search').\n"
+            "2. **Merge Concepts**: If you see 'Python 3.9' and 'Python Script', output 'Python'.\n"
+            "3. **No Overlap**: A keyword cannot exist in both categories. Decide which one fits best.\n\n"
+            f"**Output Requirement**:\n"
+            f"- Return JSON only with this structure:\n"
+            "  {\n"
+            "    \"skills_interests\": [{\"name\": str, \"weight\": float}],\n"
+            "    \"tools_platforms\": [{\"name\": str, \"weight\": float}]\n"
+            "  }\n"
+            "- Weights (0.0-1.0) should reflect relevance/duration.\n"
+            f"- Limit: Top {max_k // 2} items per category.\n\n"
             f"DATA:\n{data_preview}"
         )
 
     @staticmethod
-    def _parse_keywords(text: str) -> List[Dict]:
+    def _parse_keywords(text: str) -> object:
         if not text:
-            return []
+            return None
 
         start = text.find("{")
         end = text.rfind("}")
         if start == -1 or end == -1 or end <= start:
-            return []
+            return None
 
         try:
             payload = json.loads(text[start : end + 1])
         except Exception:
-            return []
+            return None
 
+        # Check for new structured format
+        if "skills_interests" in payload or "tools_platforms" in payload:
+            return payload
+
+        # Check for legacy format
         keywords = payload.get("keywords")
-        if not isinstance(keywords, list):
-            return []
-
-        parsed = []
-        for item in keywords:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name", "")).strip()
-            if not name:
-                continue
-            weight = item.get("weight", 0.5)
-            try:
-                weight = float(weight)
-            except Exception:
-                weight = 0.5
-            parsed.append({"name": name, "weight": max(0.0, min(1.0, weight))})
-
-        return parsed
+        if isinstance(keywords, list):
+            parsed = []
+            for item in keywords:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name", "")).strip()
+                if not name:
+                    continue
+                weight = item.get("weight", 0.5)
+                try:
+                    weight = float(weight)
+                except Exception:
+                    weight = 0.5
+                parsed.append({"name": name, "weight": max(0.0, min(1.0, weight))})
+            return parsed
+            
+        return None
 
     @staticmethod
     def _rule_based_keywords(compressed_data: Dict, min_k: int, max_k: int) -> List[Dict]:

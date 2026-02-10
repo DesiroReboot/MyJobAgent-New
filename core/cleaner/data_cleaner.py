@@ -30,6 +30,19 @@ class DataCleaner:
         "teams.exe",
         "slack.exe",
         "wechat.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "conhost.exe",
+        "taskmgr.exe",
+        "svchost.exe",
+        "runtimebroker.exe",
+        "searchhost.exe",
+        "startmenuexperiencehost.exe",
+        "csrss.exe",
+        "wmiprvse.exe",
+        "sihost.exe",
+        "ctfmon.exe",
+        "smartscreen.exe",
     }
     TITLE_BLACKLIST = {
         "new tab",
@@ -38,7 +51,60 @@ class DataCleaner:
         "home",
         "settings",
         "downloads",
+        "program manager",
+        "start",
+        "search",
+        "task switching",
+        "notification center",
+        "volume control",
+        "network flyout",
+        "input indicator",
+        "clock flyout",
+        "action center",
+        "battery flyout",
+        "calendar flyout",
+        "desktop",
     }
+    
+    # 常见的应用/网页标题后缀，清洗时移除
+    SUFFIX_PATTERNS = [
+        r" - Google Chrome$",
+        r" - Microsoft Edge$",
+        r" - Mozilla Firefox$",
+        r" - Visual Studio Code$",
+        r" - Visual Studio$",
+        r" - PyCharm$",
+        r" - IntelliJ IDEA$",
+        r" - Notepad\+\+$",
+        r" - 记事本$",
+        r" - Word$",
+        r" - Excel$",
+        r" - PowerPoint$",
+        r" - Outlook$",
+        r" - OneNote$",
+        r" - Teams$",
+        r" - Slack$",
+        r" - Zoom$",
+        r" - Discord$",
+        r" - Spotify$",
+        r" - 网易云音乐$",
+        r" - QQ音乐$",
+        r" - 微信$",
+        r" - 飞书$",
+        r" - 钉钉$",
+        r" - 知乎$",
+        r" - 豆瓣$",
+        r" - 简书$",
+        r" - 掘金$",
+        r" - GitHub$",
+        r" - Stack Overflow$",
+        r" - CSDN博客$",
+        r" - 博客园$",
+        r" - 哔哩哔哩_bilibili$",
+        r" - YouTube$",
+        r" - Wikipedia$",
+        r" - 百度百科$",
+    ]
 
     @classmethod
     def clean_url(cls, url: str) -> str:
@@ -62,10 +128,17 @@ class DataCleaner:
         if not title:
             return ""
 
+        # Remove notifications like (1) or (20+)
+        title = re.sub(r"^\(\d+\+?\)\s*", "", title)
+
         title = cls.EMAIL_PATTERN.sub("***@***.***", title)
         title = cls.PHONE_PATTERN.sub("***********", title)
         title = cls.TOKEN_PATTERN.sub("***", title)
         title = cls.PASSWORD_PATTERN.sub("***", title)
+        
+        # Remove common suffixes
+        for pattern in cls.SUFFIX_PATTERNS:
+            title = re.sub(pattern, "", title, flags=re.IGNORECASE)
 
         if len(title) > max_len:
             title = title[: max_len - 3] + "..."
@@ -199,6 +272,11 @@ class DataCleaner:
             return False
         name = title.strip().lower()
         if name in cls.TITLE_BLACKLIST:
+            return True
+        # Filter pure numbers or single characters (unless C/R/etc, but usually noise)
+        if re.match(r"^\d+$", name):
+            return True
+        if len(name) < 2 and name not in {"c", "r", "v"}: # Allow some single letters if meaningful
             return True
         return False
 
