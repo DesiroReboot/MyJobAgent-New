@@ -203,43 +203,6 @@ else:
             print(f"[ERROR] Unexpected result format: {type(result_data)}")
             keywords = []
 
-        # ========================================
-        # 推送结果至飞书
-        # ========================================
-        print()
-        print('='*60)
-        print('Task 5: Push results to Feishu')
-        print('='*60)
-        
-        feishu_app_id = os.getenv('FEISHU_APP_ID')
-        feishu_app_secret = os.getenv('FEISHU_APP_SECRET')
-        
-        if feishu_app_id and feishu_app_secret:
-            print(f'[INFO] Found Feishu App configuration (ID: {feishu_app_id[:10]}...)')
-            try:
-                pusher = FeishuPusher(mode='app')
-                # 尝试推送 - 注意：如果没有配置 user_id 或 email，且应用未安装，这里可能会失败
-                # 如果没有明确的目标用户，我们尝试推送到当前授权用户（如果有）
-                # 由于FeishuPusher需要user_id或email来定位用户，如果env中没有FEISHU_OPEN_ID或FEISHU_EMAIL
-                # 我们可能无法推送。
-                
-                # 检查是否配置了接收用户
-                if not pusher.user_id and not pusher.email:
-                     # 尝试从环境变量获取 (虽然 FeishuPusher 已经尝试了)
-                     pass
-
-                success = pusher.push_keywords(keywords)
-                if success:
-                    print('[OK] Successfully pushed keywords to Feishu!')
-                else:
-                    print('[ERROR] Failed to push to Feishu (unknown reason)')
-            except Exception as e:
-                print(f'[ERROR] Feishu push failed: {e}')
-                print('[HINT] Make sure the Feishu App is installed in your workspace and you have authorized it.')
-                print('[HINT] You may need to set FEISHU_OPEN_ID or FEISHU_EMAIL in .env if not using a bot.')
-        else:
-            print('[WARNING] FEISHU_APP_ID or FEISHU_APP_SECRET not found in .env. Skipping push.')
-
     except Exception as e:
         print(f'[ERROR] LLM call failed: {e}')
         keywords = []
