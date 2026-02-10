@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Environment (Secrets)
+.env
+.env.local
+.env.*
+!.env.example
+
+# Dependencies
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Data & Logs
+*.db
+*.sqlite
+*.log
+core/output/
+core/local_events.db
+
+# IDE
+.vscode/
+.idea/

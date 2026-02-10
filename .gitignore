@@ -29,6 +29,7 @@ core/local_events.db
 # Generated Outputs
 wordcloud.html
 *.log
+core/output/
 
 # Docs
 docs/
