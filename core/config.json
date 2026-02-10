@@ -1,0 +1,37 @@
+{
+  "llm": {
+    "provider": "dashscope",
+    "api_key": "",
+    "model": "qwen-max",
+    "timeout": 60,
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "base_url_examples": {
+      "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "deepseek": "https://api.deepseek.com/v1",
+      "doubao": "https://ark.cn-beijing.volces.com/api/v3"
+    },
+    "keyword_min": 10,
+    "keyword_max": 20
+  },
+  "collector": {
+    "source": "activitywatch",
+    "aw_db_path": "",
+    "days": 7,
+    "sample_interval_seconds": 30,
+    "idle_threshold_seconds": 300,
+    "browsers": ["chrome", "edge", "firefox"],
+    "log_file": "collector.log"
+  },
+  "feishu": {
+    "account": "",
+    "accounts": {
+      "default": {
+        "webhook_url": ""
+      }
+    },
+    "webhook_url": ""
+  },
+  "output": {
+    "wordcloud_file": "wordcloud.html"
+  }
+}
