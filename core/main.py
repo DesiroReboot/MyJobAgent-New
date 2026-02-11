@@ -11,6 +11,7 @@ from cleaner.data_cleaner import DataCleaner
 from config import AppConfig, resolve_config_path
 from collectors.aw_collector import ActivityWatchCollector
 from llm.llm_client import create_llm_client
+from analysis.auditor import annotate_keywords
 from visualization.wordcloud import WordCloudGenerator
 from pusher.feishu_pusher import FeishuPusher
 from storage.event_store import EventStore
@@ -147,15 +148,66 @@ def run_analysis(config: AppConfig, days: int) -> int:
     )
 
     min_k = int(llm_cfg.get("keyword_min", 5))
-    max_k = int(llm_cfg.get("keyword_max", 20))
+    # Adjust max_k based on days
+    default_max = int(llm_cfg.get("keyword_max", 20))
+    if days <= 1:
+        max_k = 5
+    else:
+        max_k = 10
+    
+    # Override if config explicitly forces something else? 
+    # User requested: 1-day -> 5, 7-day -> 10.
+    # We will respect this rule over config.json's keyword_max for now, or use it as a cap.
 
     try:
-        keywords = llm_client.extract_keywords(compressed_data, min_k=min_k, max_k=max_k)
+        self_consistency_runs = int(llm_cfg.get("self_consistency_runs", 1) or 1)
+        runs = []
+        if self_consistency_runs <= 1:
+            keywords = llm_client.extract_keywords(compressed_data, min_k=min_k, max_k=max_k)
+        else:
+            keywords = None
+            for _ in range(self_consistency_runs):
+                run_keywords = llm_client.extract_keywords(compressed_data, min_k=min_k, max_k=max_k)
+                runs.append(run_keywords)
+            # Use the last run as primary, but compute consistency across runs
+            keywords = runs[-1] if runs else None
     except Exception as e:
         print(f"[Step1] LLM call failed: {e}")
         # In scheduler mode, we might not want to raise, just log and return
         return 1
-    print(f"[Step1] Keywords extracted: {len(keywords)}")
+    def _count_keywords(payload) -> int:
+        if isinstance(payload, dict):
+            total = 0
+            for key in ("skills_interests", "tools_platforms"):
+                total += len(payload.get(key, []) or [])
+            return total
+        if isinstance(payload, list):
+            return len(payload)
+        return 0
+
+    print(f"[Step1] Keywords extracted: {_count_keywords(keywords)}")
+
+    # Annotate keywords with evidence/scores/level (2A)
+    consistency_runs = []
+    if isinstance(runs, list) and runs:
+        for item in runs:
+            if isinstance(item, dict):
+                names = []
+                for key in ("skills_interests", "tools_platforms"):
+                    for kw in item.get(key, []) or []:
+                        name = str(kw.get("name", "")).strip()
+                        if name:
+                            names.append(name)
+                consistency_runs.append(names)
+            elif isinstance(item, list):
+                names = []
+                for kw in item:
+                    name = str(kw.get("name", "")).strip()
+                    if name:
+                        names.append(name)
+                consistency_runs.append(names)
+
+    keywords = annotate_keywords(keywords, compressed_data, consistency_runs=consistency_runs)
 
     output_cfg = config.output_config()
     base_wc_file = output_cfg.get("wordcloud_file", "wordcloud.html")

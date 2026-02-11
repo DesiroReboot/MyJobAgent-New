@@ -144,9 +144,28 @@ class FeishuPusher:
         
         # Prepare message content based on structure
         if isinstance(keywords, dict) and ("skills_interests" in keywords or "tools_platforms" in keywords):
+            # Helper to filter and sort
+            def _process_items(items):
+                valid = []
+                for item in items:
+                    level = str(item.get("level", "pass")).lower()
+                    weight = item.get("weight", 0.0)
+                    
+                    # Rule 1: Reject "reject" or weight < 0.05
+                    if level == "reject":
+                        continue
+                    if weight < 0.05:
+                        continue
+                        
+                    valid.append(item)
+                
+                # Rule 2: Sort by weight desc, take Top 10
+                valid.sort(key=lambda x: x.get("weight", 0), reverse=True)
+                return valid[:10]
+
             # New structured format
-            skills = keywords.get("skills_interests", [])
-            tools = keywords.get("tools_platforms", [])
+            skills = _process_items(keywords.get("skills_interests", []))
+            tools = _process_items(keywords.get("tools_platforms", []))
             
             content_lines = [
                 f"📊 **User Interest Analysis Report{title_suffix}**",
@@ -157,7 +176,16 @@ class FeishuPusher:
             
             if skills:
                 for i, kw in enumerate(skills, 1):
-                    content_lines.append(f"{i}. {kw['name']} (Weight: {kw['weight']:.2f})")
+                    level = str(kw.get("level", "pass")).lower()
+                    signal_text = "Strong" if level == "pass" else "Weak"
+                    
+                    # Step 1 base info
+                    line = f"{i}. {kw['name']} (Weight: {kw['weight']:.2f})"
+                    
+                    # Step 2 sub-line
+                    line += f"\n   └─ 矫正结果: {signal_text}"
+                        
+                    content_lines.append(line)
             else:
                 content_lines.append("No significant skills detected.")
                 
@@ -166,7 +194,16 @@ class FeishuPusher:
             
             if tools:
                 for i, kw in enumerate(tools, 1):
-                    content_lines.append(f"{i}. {kw['name']} (Weight: {kw['weight']:.2f})")
+                    level = str(kw.get("level", "pass")).lower()
+                    signal_text = "Strong" if level == "pass" else "Weak"
+                    
+                    # Step 1 base info
+                    line = f"{i}. {kw['name']} (Weight: {kw['weight']:.2f})"
+                    
+                    # Step 2 sub-line
+                    line += f"\n   └─ 矫正结果: {signal_text}"
+                        
+                    content_lines.append(line)
             else:
                 content_lines.append("No significant tools detected.")
                 
@@ -174,6 +211,7 @@ class FeishuPusher:
             
         else:
             # Legacy list format
+            has_level = any("level" in kw for kw in keywords)
             content_lines = [
                 f"📊 **User Interest Analysis Report{title_suffix}**",
                 f"🕒 Time: {current_time}",
@@ -182,7 +220,9 @@ class FeishuPusher:
             ]
             
             for i, kw in enumerate(keywords, 1):
-                content_lines.append(f"{i}. {kw['name']} (Weight: {kw['weight']:.2f})")
+                level = kw.get("level")
+                level_text = f", Level: {level}" if has_level and level else ""
+                content_lines.append(f"{i}. {kw['name']} (Weight: {kw['weight']:.2f}{level_text})")
                 
             text_content = "\n".join(content_lines)
 
@@ -235,10 +275,13 @@ class FeishuPusher:
             return "关键词列表为空"
 
         items = []
+        has_level = any("level" in kw for kw in keywords)
         for kw in keywords[:20]:
             name = kw.get("name", "")
             weight = kw.get("weight", kw.get("final_weight", 0.0))
-            items.append(f"- {name} ({weight:.2f})")
+            level = kw.get("level")
+            level_text = f", Level: {level}" if has_level and level else ""
+            items.append(f"- {name} ({weight:.2f}{level_text})")
 
         return "关键词 (Top 20):\n" + "\n".join(items)
 

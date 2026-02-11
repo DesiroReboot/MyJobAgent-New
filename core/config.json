@@ -29,7 +29,7 @@
   },
   "collector": {
     "source": "activitywatch",
-    "aw_db_path": "",
+    "aw_db_path": "C:\\Users\\Jiayang_Pan\\AppData\\Local\\activitywatch\\activitywatch\\aw-server\\peewee-sqlite.v2.db",
     "days": 7,
     "sample_interval_seconds": 30,
     "idle_threshold_seconds": 300,

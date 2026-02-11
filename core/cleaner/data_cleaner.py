@@ -1,4 +1,4 @@
-﻿import re
+import re
 from urllib.parse import urlparse, urlunparse
 from typing import Dict, List
 from collections import Counter, defaultdict
@@ -124,7 +124,7 @@ class DataCleaner:
             return url
 
     @classmethod
-    def clean_title(cls, title: str, max_len: int = 50) -> str:
+    def clean_title(cls, title: str, max_len: int = 150) -> str:
         if not title:
             return ""
 

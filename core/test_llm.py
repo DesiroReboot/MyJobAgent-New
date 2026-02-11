@@ -16,6 +16,8 @@ from storage.event_store import EventStore
 from llm.llm_client import LLMClient
 from pusher.feishu_pusher import FeishuPusher
 from config import AppConfig
+from cleaner.data_cleaner import DataCleaner
+from analysis.auditor import annotate_keywords
 
 # 加载配置
 config = AppConfig.from_file('config.json')
@@ -110,69 +112,34 @@ else:
     # ========================================
     print()
     print('='*60)
-    print('Compressing real data for LLM input...')
+    print('Compressing real data for LLM input (using DataCleaner)...')
     print('='*60)
     
-    # 按域名聚合web事件
-    web_stats = defaultdict(lambda: {'titles': [], 'total_duration': 0})
-    for e in events:
-        if e.event_type == 'web' and e.url:
-            # 提取域名
-            domain = e.url.split('/')[0] if e.url else 'unknown'
-            web_stats[domain]['titles'].append(e.title)
-            web_stats[domain]['total_duration'] += e.duration
-    
-    # 取Top10域名
-    sorted_domains = sorted(web_stats.items(), key=lambda x: x[1]['total_duration'], reverse=True)[:10]
-    
-    compressed_web = {}
-    for domain, stats in sorted_domains:
-        # 最多保留5个title samples
-        unique_titles = list(dict.fromkeys(stats['titles']))[:5]
-        compressed_web[domain] = {
-            'title_samples': unique_titles,
-            'total_duration': stats['total_duration']
-        }
-    
-    # 统计非web事件 (按App聚合)
-    app_stats = defaultdict(lambda: {'titles': [], 'total_duration': 0})
-    for e in events:
-        if e.event_type == 'window' and e.app:
-            app_stats[e.app]['titles'].append(e.title)
-            app_stats[e.app]['total_duration'] += e.duration
+    # Use DataCleaner to compress data
+    # Note: DataCleaner expects objects with timestamp, duration, event_type, url, title, app, status
+    # LocalEvent (from EventStore) is compatible with ActivityWatchRecord fields required by DataCleaner
+    try:
+        compressed_data = DataCleaner.compress_data(events)
+        
+        # Structure adaptation for LLM Prompt if needed, or just use as is.
+        # DataCleaner returns 'web', 'non_web_samples', 'meta'.
+        # The prompt expects 'web' and 'apps'. Let's alias 'non_web_samples' to 'apps' or let LLM figure it out.
+        # To be safe and consistent with prompt description, we can rename/restructure if needed.
+        # But 'non_web_samples' contains 'window' which has 'app' field. LLM usually handles this well.
+        
+        web_count = len(compressed_data.get('web', {}))
+        app_count = len(compressed_data.get('non_web_samples', {}).get('window', []))
+        
+        print(f'[INFO] Compressed data:')
+        print(f'   - Web domains: {web_count}')
+        print(f'   - Window samples: {app_count}')
+        print(f'   - Meta: {compressed_data.get("meta")}')
+        print()
+        
+    except Exception as e:
+        print(f'[ERROR] Data compression failed: {e}')
+        compressed_data = {}
 
-    # 取Top10 App
-    sorted_apps = sorted(app_stats.items(), key=lambda x: x[1]['total_duration'], reverse=True)[:10]
-
-    compressed_apps = {}
-    for app_name, stats in sorted_apps:
-        # 最多保留5个title samples
-        unique_titles = list(dict.fromkeys(filter(None, stats['titles'])))[:5]
-        compressed_apps[app_name] = {
-            'title_samples': unique_titles,
-            'total_duration': stats['total_duration']
-        }
-    
-    # 计算afk比例
-    total_duration = sum(e.duration for e in events)
-    afk_duration = sum(e.duration for e in events if e.event_type == 'afk')
-    afk_ratio = afk_duration / total_duration if total_duration > 0 else 0
-    
-    # 构建LLM输入
-    test_data = {
-        'web': compressed_web,
-        'apps': compressed_apps, # 新的分组结构
-        'meta': {
-            'afk_ratio': round(afk_ratio, 2)
-        }
-    }
-    
-    print(f'[INFO] Compressed data:')
-    print(f'   - Web domains: {len(compressed_web)}')
-    print(f'   - Active Apps: {len(compressed_apps)}')
-    print(f'   - AFK ratio: {afk_ratio:.2%}')
-    print()
-    
     print()
     print('='*60)
     print(f'Task 4: LLM output to console (min={keyword_min}, max={keyword_max})')
@@ -181,36 +148,40 @@ else:
     print()
     
     try:
-        # 使用配置的关键词数量
-        # client.extract_keywords now returns a dict {"skills_interests": [...], "tools_platforms": [...]}
-        # but the wrapper might still be returning a list if we didn't update extract_keywords return type hint or logic
-        # Let's check extract_keywords implementation first.
-        # Wait, I modified _build_prompt but extract_keywords parses the JSON.
-        # I need to verify if extract_keywords just returns json.loads(content) or expects a specific list format.
-        # Assuming extract_keywords returns the raw dict from LLM now.
-        
-        result_data = client.extract_keywords(test_data, min_k=keyword_min, max_k=keyword_max)
+        result_data = client.extract_keywords(compressed_data, min_k=keyword_min, max_k=keyword_max)
         
         keywords = [] # For pusher compatibility
         
-        if isinstance(result_data, dict) and ("skills_interests" in result_data or "tools_platforms" in result_data):
-             # New structured format
+        if isinstance(result_data, dict):
+            # Step 2A: Run Auditor
+            print('[INFO] Running Step 2A: Auditor (annotate_keywords)...')
+            audited_result = annotate_keywords(result_data, compressed_data)
+            
+            # Use audited result
+            result_data = audited_result
+            
             skills = result_data.get("skills_interests", [])
             tools = result_data.get("tools_platforms", [])
             
-            print('[OK] LLM call successful (Structured Output)!')
+            print('[OK] LLM + Auditor call successful!')
             print()
             
             print(f'[LIST] Skills & Interests ({len(skills)}):')
             for i, kw in enumerate(skills, 1):
-                print(f'   {i}. {kw["name"]} (weight: {kw["weight"]:.2f})')
+                level = kw.get('level', 'N/A').upper()
+                ev = kw.get('evidence', {})
+                print(f'   {i}. {kw["name"]} (weight: {kw["weight"]:.2f}) [{level}]')
+                if ev:
+                    print(f'      Evidence: {ev.get("support_count")} hits, {ev.get("duration_seconds", 0):.0f}s')
                 
             print(f'\n[LIST] Tools & Platforms ({len(tools)}):')
             for i, kw in enumerate(tools, 1):
-                print(f'   {i}. {kw["name"]} (weight: {kw["weight"]:.2f})')
+                level = kw.get('level', 'N/A').upper()
+                ev = kw.get('evidence', {})
+                print(f'   {i}. {kw["name"]} (weight: {kw["weight"]:.2f}) [{level}]')
+                if ev:
+                    print(f'      Evidence: {ev.get("support_count")} hits, {ev.get("duration_seconds", 0):.0f}s')
             
-            # Combine for pusher (pusher needs update to handle dict, but for now we can merge or pass dict if pusher supports it)
-            # We will update pusher next. For now, let's pass the dict.
             keywords = result_data
             
         elif isinstance(result_data, list):
