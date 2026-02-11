@@ -66,6 +66,31 @@ class DataCleaner:
         "desktop",
     }
     
+    # High Value: Logic implementation files
+    HIGH_VALUE_EXTENSIONS = {
+        ".py", ".java", ".kt", ".cpp", ".c", ".h", ".hpp", ".cs", ".go", ".rs", 
+        ".ts", ".tsx", ".js", ".jsx", ".php", ".rb", ".swift", ".scala", ".lua", ".pl"
+    }
+    
+    # High Value: Logic keywords (typically class/file names)
+    HIGH_VALUE_KEYWORDS = {
+        "controller", "service", "repository", "model", "viewmodel", "component", 
+        "hook", "utils", "helper", "manager", "handler", "provider", "adapter"
+    }
+
+    # Low Value: Configuration, logs, generated files
+    LOW_VALUE_EXTENSIONS = {
+        ".json", ".yaml", ".yml", ".log", ".lock", ".xml", ".ini", ".toml", 
+        ".conf", ".cfg", ".properties", ".svg", ".css", ".scss", ".less", 
+        ".map", ".meta", ".tmp", ".bak"
+    }
+    
+    # Low Value: Specific filenames (case insensitive check)
+    LOW_VALUE_FILENAMES = {
+        "readme", "license", "changelog", "settings", "preferences", "configuration", 
+        "package-lock", "yarn", "dockerfile", "makefile", "gitignore"
+    }
+
     # 常见的应用/网页标题后缀，清洗时移除
     SUFFIX_PATTERNS = [
         r" - Google Chrome$",
@@ -153,9 +178,49 @@ class DataCleaner:
             return "unknown"
 
     @classmethod
+    def _is_low_value_title(cls, title: str) -> bool:
+        """
+        Determines if a title is considered 'low value' (config, logs, readme, etc.).
+        Low value titles should be discarded to avoid noise.
+        """
+        if not title:
+            return True
+            
+        lower_title = title.lower()
+        
+        # Check extensions
+        # Extract extension: last part after dot
+        parts = lower_title.rsplit('.', 1)
+        if len(parts) > 1:
+            ext = "." + parts[1]
+            # Special case: .md files
+            if ext == ".md":
+                # README.md is low value
+                if "readme" in parts[0]:
+                    return True
+                # Other .md (TODO.md, DevDoc.md) are NOT low value (keep them)
+                return False
+                
+            if ext in cls.LOW_VALUE_EXTENSIONS:
+                return True
+        
+        # Check filenames/keywords
+        # If title matches exactly or looks like a file "settings.json" -> handled by ext
+        # If title is just "Settings", it might be caught by TITLE_BLACKLIST, but double check
+        for keyword in cls.LOW_VALUE_FILENAMES:
+            # Check if keyword appears as a standalone word or the main name
+            # e.g. "Project Settings" -> "settings" in ...
+            if keyword in lower_title:
+                 return True
+                 
+        return False
+
+    @classmethod
     def compress_data(cls, aw_records: List) -> Dict:
         domain_stats: Dict = {}
-        window_agg = defaultdict(int)
+        # New: Group by App Name, aggregate duration, collect unique titles (0/1 logic)
+        app_stats: Dict = {}
+        
         audio_agg = defaultdict(int)
         afk_intervals = []
         total_intervals = []
@@ -203,8 +268,18 @@ class DataCleaner:
                 app = cls.clean_title(record.app)
                 if cls._is_noise_app(app) or cls._is_noise_title(title):
                     continue
-                key = (app, title)
-                window_agg[key] += duration
+                
+                # New Logic: Group by App, accumulate duration, set of titles
+                if app not in app_stats:
+                    app_stats[app] = {
+                        "duration": 0,
+                        "titles": set()
+                    }
+                app_stats[app]["duration"] += duration
+                
+                # Filter Low Value Titles
+                if title and not cls._is_low_value_title(title):
+                    app_stats[app]["titles"].add(title)
 
             elif record.event_type == "audio":
                 if duration < cls.MIN_EVENT_SECONDS:
@@ -213,6 +288,7 @@ class DataCleaner:
                 app = cls.clean_title(record.app)
                 if cls._is_noise_app(app) or cls._is_noise_title(title):
                     continue
+                # Audio still uses simple aggregation for now (less critical)
                 key = (app, title)
                 audio_agg[key] += duration
 
@@ -231,6 +307,23 @@ class DataCleaner:
                 title_freq[item["title"]] += 1
             stats["title_freq"] = dict(title_freq)
             del stats["raw_titles_with_meta"]
+
+        # Format app stats for output
+        # Convert sets to lists and sort by app duration
+        formatted_apps = []
+        for app, stats in app_stats.items():
+            # Limit titles to top N to avoid token overflow? 
+            # User wants 0/1 logic, so we keep all unique titles but maybe limit count
+            # Let's keep up to 20 unique titles per app for now to be safe
+            unique_titles = list(stats["titles"])[:20] 
+            formatted_apps.append({
+                "app": app,
+                "duration": stats["duration"],
+                "titles": unique_titles
+            })
+        
+        # Sort apps by duration descending
+        formatted_apps.sort(key=lambda x: x["duration"], reverse=True)
 
         def top_samples(agg_map, limit=5):
             items = [
@@ -252,7 +345,7 @@ class DataCleaner:
             },
             "web": domain_stats,
             "non_web_samples": {
-                "window": top_samples(window_agg),
+                "window": formatted_apps,  # Now uses App-Grouped structure
                 "audio": top_samples(audio_agg),
             },
         }
