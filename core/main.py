@@ -8,7 +8,7 @@ except Exception:
     load_dotenv = None
 
 from cleaner.data_cleaner import DataCleaner
-from config import AppConfig, resolve_config_path
+from config import AppConfig, resolve_api_key, resolve_config_path
 from collectors.aw_collector import ActivityWatchCollector
 from llm.llm_client import create_llm_client
 from analysis.auditor import annotate_keywords
@@ -38,29 +38,6 @@ def load_env() -> None:
                 os.environ[key] = value
     except Exception:
         pass
-
-
-def resolve_api_key(provider: str, configured_key: str) -> str:
-    if configured_key:
-        return configured_key
-
-    provider = (provider or "").lower()
-    if provider == "zhipu":
-        return (
-            os.environ.get("ZHIPU_API_KEY")
-            or os.environ.get("GLM_API_KEY")
-            or os.environ.get("BIGMODEL_API_KEY")
-            or ""
-        )
-    if provider == "doubao":
-        return os.environ.get("VOLCANO_API_KEY") or os.environ.get("ARK_API_KEY") or ""
-    if provider in {"openai", "openai_compat"}:
-        return os.environ.get("OPENAI_API_KEY") or ""
-    if provider == "deepseek":
-        return os.environ.get("DEEPSEEK_API_KEY") or ""
-    if provider == "dashscope":
-        return os.environ.get("DASHSCOPE_API_KEY") or ""
-    return ""
 
 
 def ensure_output_path(path_str: str) -> str:

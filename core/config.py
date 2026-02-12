@@ -12,6 +12,29 @@ def resolve_config_path(config_path: str) -> Path:
     return path
 
 
+def resolve_api_key(provider: str, configured_key: str) -> str:
+    if configured_key:
+        return configured_key
+
+    provider = (provider or "").lower()
+    if provider == "zhipu":
+        return (
+            os.environ.get("ZHIPU_API_KEY")
+            or os.environ.get("GLM_API_KEY")
+            or os.environ.get("BIGMODEL_API_KEY")
+            or ""
+        )
+    if provider == "doubao":
+        return os.environ.get("VOLCANO_API_KEY") or os.environ.get("ARK_API_KEY") or ""
+    if provider in {"openai", "openai_compat"}:
+        return os.environ.get("OPENAI_API_KEY") or ""
+    if provider == "deepseek":
+        return os.environ.get("DEEPSEEK_API_KEY") or ""
+    if provider == "dashscope":
+        return os.environ.get("DASHSCOPE_API_KEY") or ""
+    return ""
+
+
 class AppConfig:
     def __init__(self, data: Dict, base_dir: Path) -> None:
         self._data = data

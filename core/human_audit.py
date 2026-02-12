@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 # Add core to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.config import AppConfig, resolve_config_path
+from core.config import AppConfig, resolve_api_key, resolve_config_path
 from core.storage.event_store import EventStore
 from core.collectors.aw_collector import ActivityWatchCollector
 from core.cleaner.data_cleaner import DataCleaner
@@ -28,29 +28,6 @@ MIN_SLICE_LINES = 20
 TIME_GAP_SPLIT_SEC = 120
 
 TOP_SLICE_KEYWORDS = 10
-
-
-def resolve_api_key(provider: str, configured_key: str) -> str:
-    if configured_key:
-        return configured_key
-
-    provider = (provider or "").lower()
-    if provider == "zhipu":
-        return (
-            os.environ.get("ZHIPU_API_KEY")
-            or os.environ.get("GLM_API_KEY")
-            or os.environ.get("BIGMODEL_API_KEY")
-            or ""
-        )
-    if provider == "doubao":
-        return os.environ.get("VOLCANO_API_KEY") or os.environ.get("ARK_API_KEY") or ""
-    if provider in {"openai", "openai_compat"}:
-        return os.environ.get("OPENAI_API_KEY") or ""
-    if provider == "deepseek":
-        return os.environ.get("DEEPSEEK_API_KEY") or ""
-    if provider == "dashscope":
-        return os.environ.get("DASHSCOPE_API_KEY") or ""
-    return ""
 
 
 def load_env():
