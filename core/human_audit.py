@@ -29,6 +29,11 @@ TIME_GAP_SPLIT_SEC = 120
 
 TOP_SLICE_KEYWORDS = 10
 
+SEGMENT_LLM_MIN_K = 5
+SEGMENT_LLM_MAX_K = 10
+SLICE_LLM_MIN_K = 3
+SLICE_LLM_MAX_K = 8
+
 
 def load_env():
     try:
@@ -381,6 +386,24 @@ def _flatten_llm_keywords(extracted: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def _extract_llm_items(
+    llm_client: Any,
+    compressed_data: Dict[str, Any],
+    *,
+    min_k: int,
+    max_k: int,
+    label: str,
+) -> List[Dict[str, Any]]:
+    if not llm_client:
+        return []
+    try:
+        extracted = llm_client.extract_keywords(compressed_data, min_k=min_k, max_k=max_k)
+        return _flatten_llm_keywords(extracted)
+    except Exception as e:
+        print(f"[LLM] Failed for {label}: {e}")
+        return []
+
+
 def _select_weight(item: Dict[str, Any]) -> float:
     scores = item.get("scores") or {}
     if isinstance(scores, dict) and "evidence" in scores:
@@ -410,6 +433,15 @@ def _build_slice_keywords(
     return llm_slice, nlp_slice
 
 
+def _slice_llm_mode() -> str:
+    v = str(os.environ.get("AUDIT_SLICE_LLM", "")).strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return "off"
+    if v in ("1", "true", "yes", "on"):
+        return "on"
+    return "review"
+
+
 def _get_score(prompt: str) -> str:
     while True:
         choice = input(f"{prompt} (0/1/2/s=skip/q=quit): ").strip().lower()
@@ -422,6 +454,7 @@ def run_audit_session():
     load_env()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    slice_llm_mode = _slice_llm_mode()
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     log_dir = os.path.join(root_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -488,12 +521,13 @@ def run_audit_session():
             print(f"[Tags]     {', '.join(summary['tags']) or 'N/A'}")
 
             llm_items: List[Dict[str, Any]] = []
-            if llm_client:
-                try:
-                    extracted = llm_client.extract_keywords(compressed, min_k=5, max_k=10)
-                    llm_items = _flatten_llm_keywords(extracted)
-                except Exception as e:
-                    print(f"[LLM] Failed for {seg_id}: {e}")
+            llm_items = _extract_llm_items(
+                llm_client,
+                compressed,
+                min_k=SEGMENT_LLM_MIN_K,
+                max_k=SEGMENT_LLM_MAX_K,
+                label=seg_id,
+            )
 
             nlp_set = build_baseline_keywords(compressed, limit=max(10, len(llm_items) + 5))
             nlp_items = [{"name": kw, "type": "NLP (Baseline)", "weight": 0.0} for kw in nlp_set]
@@ -531,11 +565,21 @@ def run_audit_session():
             slice_out: List[Dict[str, Any]] = []
 
             review_slices = input("Review slices for this segment? (y/n): ").strip().lower() == "y"
+            slice_llm_enabled = bool(llm_client) and (slice_llm_mode == "on" or (slice_llm_mode == "review" and review_slices))
 
             for sl in slices:
                 slice_events = sl["events"]
                 slice_compressed = DataCleaner.compress_data(slice_events)
-                llm_slice, nlp_slice = _build_slice_keywords(llm_items, slice_compressed)
+                slice_llm_items: List[Dict[str, Any]] = []
+                if slice_llm_enabled:
+                    slice_llm_items = _extract_llm_items(
+                        llm_client,
+                        slice_compressed,
+                        min_k=SLICE_LLM_MIN_K,
+                        max_k=SLICE_LLM_MAX_K,
+                        label=f"{seg_id}/{sl['slice_id']}",
+                    )
+                llm_slice, nlp_slice = _build_slice_keywords(slice_llm_items, slice_compressed)
 
                 raw_lines = [_format_event_line(ev) for ev in slice_events]
                 slice_payload = {
@@ -548,6 +592,8 @@ def run_audit_session():
                     "end": sl["end"].isoformat(),
                     "line_count": sl["line_count"],
                     "raw_lines": raw_lines,
+                    "slice_llm_keywords": llm_slice,
+                    "slice_nlp_keywords": nlp_slice,
                     "slice_keywords_llm": llm_slice,
                     "slice_keywords_nlp": nlp_slice,
                 }
@@ -599,6 +645,10 @@ def run_audit_session():
                     "summary": summary,
                     "events": [_event_to_dict(ev) for ev in seg_events],
                     "slices": slice_out,
+                    "slice_reviewed": review_slices,
+                    "slice_llm_enabled": slice_llm_enabled,
+                    "segment_llm_keywords": llm_items,
+                    "segment_nlp_keywords": nlp_items,
                     "llm_output": llm_items,
                     "nlp_output": nlp_items,
                 }
@@ -618,6 +668,11 @@ def run_audit_session():
                             "max_slice_lines": MAX_SLICE_LINES,
                             "min_slice_lines": MIN_SLICE_LINES,
                             "time_gap_split_sec": TIME_GAP_SPLIT_SEC,
+                            "segment_llm_min_k": SEGMENT_LLM_MIN_K,
+                            "segment_llm_max_k": SEGMENT_LLM_MAX_K,
+                            "slice_llm_mode": slice_llm_mode,
+                            "slice_llm_min_k": SLICE_LLM_MIN_K,
+                            "slice_llm_max_k": SLICE_LLM_MAX_K,
                         },
                     },
                     "segments": segments_out,

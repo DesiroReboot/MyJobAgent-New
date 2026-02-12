@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import os
 from pathlib import Path
 
@@ -137,6 +137,8 @@ def run_analysis(config: AppConfig, days: int) -> int:
     # Override if config explicitly forces something else? 
     # User requested: 1-day -> 5, 7-day -> 10.
     # We will respect this rule over config.json's keyword_max for now, or use it as a cap.
+
+    print(f"[Step1] TopN limits (days={days}): skills={skills_limit}, tools={tools_limit}, min_k={min_k}, max_k={max_k}")
 
     try:
         self_consistency_runs = int(llm_cfg.get("self_consistency_runs", 1) or 1)
