@@ -84,6 +84,29 @@ class AppConfig:
         
         return llm
 
+    def llm_topn_limits(self, days: int, default_skills: int, default_tools: int) -> Tuple[int, int]:
+        llm = self.section("llm")
+        mapping = llm.get("topn_by_days", {})
+        if not isinstance(mapping, dict):
+            return default_skills, default_tools
+
+        cfg = mapping.get(str(days)) or mapping.get("default") or {}
+        if not isinstance(cfg, dict):
+            return default_skills, default_tools
+
+        skills = cfg.get("skills", default_skills)
+        tools = cfg.get("tools", default_tools)
+        try:
+            skills = int(skills)
+        except Exception:
+            skills = default_skills
+        try:
+            tools = int(tools)
+        except Exception:
+            tools = default_tools
+
+        return skills, tools
+
     def schedule_config(self) -> Dict:
         return self.section("schedule")
 

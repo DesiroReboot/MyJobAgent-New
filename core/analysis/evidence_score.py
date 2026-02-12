@@ -32,9 +32,16 @@ def build_title_entries(compressed_data: Dict) -> List[Dict]:
 
     non_web = compressed_data.get("non_web_samples", {}) if isinstance(compressed_data, dict) else {}
     for sample in non_web.get("window", []) or []:
-        title = sample.get("title") or ""
-        if title:
-            entries.append({"title": title, "count": 1, "duration": float(sample.get("duration", 0) or 0)})
+        # Handle App-Grouped structure (titles is a list)
+        titles = sample.get("titles", [])
+        # Also support legacy single title if present
+        if "title" in sample and sample["title"]:
+            titles.append(sample["title"])
+            
+        for title in titles:
+            if title:
+                entries.append({"title": title, "count": 1, "duration": float(sample.get("duration", 0) or 0)})
+
     for sample in non_web.get("audio", []) or []:
         title = sample.get("title") or ""
         if title:

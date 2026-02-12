@@ -16,7 +16,11 @@
       "doubao": "https://ark.cn-beijing.volces.com/api/v3"
     },
     "keyword_min": 10,
-    "keyword_max": 10
+    "keyword_max": 10,
+    "topn_by_days": {
+      "1": { "skills": 5, "tools": 3 },
+      "7": { "skills": 10, "tools": 5 }
+    }
   },
   "env_vars": {
     "DASHSCOPE_API_KEY": "",

@@ -66,6 +66,22 @@ class DataCleaner:
         "desktop",
     }
     
+    CHATBOT_DOMAINS = {
+        'chatgpt.com', 
+        'claude.ai', 
+        'gemini.google.com', 
+        'sass-node5.chatshare.biz', 
+        # Wildcards handled by logic
+    }
+    
+    TRUNCATION_MAP = {
+        'agent开': 'Agent开发',
+        'ai开': 'AI开发',
+        '需求分': '需求分析',
+        '代码优': '代码优化',
+    }
+
+    
     # High Value: Logic implementation files
     HIGH_VALUE_EXTENSIONS = {
         ".py", ".java", ".kt", ".cpp", ".c", ".h", ".hpp", ".cs", ".go", ".rs", 
@@ -165,6 +181,13 @@ class DataCleaner:
         for pattern in cls.SUFFIX_PATTERNS:
             title = re.sub(pattern, "", title, flags=re.IGNORECASE)
 
+        # Truncation Repair
+        for k, v in cls.TRUNCATION_MAP.items():
+            if title.lower().endswith(k.lower()):
+                title = title[:-len(k)] + v
+            elif k.lower() in title.lower():
+                title = re.sub(re.escape(k), v, title, flags=re.IGNORECASE)
+
         if len(title) > max_len:
             title = title[: max_len - 3] + "..."
 
@@ -242,6 +265,16 @@ class DataCleaner:
                 clean_url = cls.clean_url(record.url)
                 domain = cls.extract_domain(clean_url)
                 clean_title = cls.clean_title(record.title)
+
+                # Chatbot Masking
+                is_chatbot = domain in cls.CHATBOT_DOMAINS
+                if not is_chatbot:
+                    # Check for wildcard matches (e.g., *.chatshare.biz)
+                    if domain.endswith("chatshare.biz"):
+                         is_chatbot = True
+                
+                if is_chatbot:
+                    clean_title = f"AI Assistance Session ({domain})"
 
                 if domain not in domain_stats:
                     domain_stats[domain] = {

@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 
@@ -24,13 +24,31 @@ class LLMClient:
         self.timeout = timeout
         self.base_url = base_url.rstrip("/")
 
-    def extract_keywords(self, compressed_data: Dict, min_k: int = 3, max_k: int = 5) -> Dict:
+    CONTAINERS = {
+        'msedge.exe', 'chrome.exe', 'code.exe', 'idea64.exe', 'explorer.exe',
+        'Microsoft Edge', 'Google Chrome', 'Visual Studio Code', 'VS Code', 'IntelliJ IDEA', 'File Explorer'
+    }
+
+    def extract_keywords(
+        self,
+        compressed_data: Dict,
+        min_k: int = 3,
+        max_k: int = 5,
+        skills_limit: Optional[int] = None,
+        tools_limit: Optional[int] = None,
+    ) -> Dict:
         """
         Extract keywords from compressed data using LLM.
         Returns a dict with 'skills_interests' and 'tools_platforms' keys, 
         or a legacy list of dicts if LLM fails to structure it (or falls back).
         """
-        prompt = self._build_prompt(compressed_data, min_k, max_k)
+        prompt = self._build_prompt(
+            compressed_data,
+            min_k,
+            max_k,
+            skills_limit=skills_limit,
+            tools_limit=tools_limit,
+        )
         try:
             text = self._call_llm(prompt)
             parsed = self._parse_keywords(text)
@@ -59,17 +77,40 @@ class LLMClient:
         fallback = self._rule_based_keywords(compressed_data, min_k, max_k)
         return fallback
 
-    @staticmethod
-    def _filter_keywords(parsed: object, threshold: float = 0.05) -> object:
+    @classmethod
+    def _filter_keywords(cls, parsed: object, threshold: float = 0.05) -> object:
         if not parsed:
             return None
         
         if isinstance(parsed, dict) and ("skills_interests" in parsed or "tools_platforms" in parsed):
             # Filter structured
-            if "skills_interests" in parsed:
-                parsed["skills_interests"] = [k for k in parsed["skills_interests"] if k.get("weight", 0) >= threshold]
-            if "tools_platforms" in parsed:
-                parsed["tools_platforms"] = [k for k in parsed["tools_platforms"] if k.get("weight", 0) >= threshold]
+            skills = parsed.get("skills_interests", [])
+            tools = parsed.get("tools_platforms", [])
+            
+            # Post-Processing: Move/Discard CONTAINERS from Skills
+            new_skills = []
+            tool_names = {t.get("name", "").lower() for t in tools}
+            
+            # Pre-compute lower case containers
+            lower_containers = {c.lower() for c in cls.CONTAINERS}
+            
+            for s in skills:
+                name = s.get("name", "")
+                weight = s.get("weight", 0)
+                
+                if name.lower() in lower_containers: 
+                    # It's a container. Move to tools if not present.
+                    if name.lower() not in tool_names:
+                        tools.append(s)
+                        tool_names.add(name.lower())
+                    # Discard from skills
+                    continue
+                
+                if weight >= threshold:
+                    new_skills.append(s)
+            
+            parsed["skills_interests"] = new_skills
+            parsed["tools_platforms"] = [k for k in tools if k.get("weight", 0) >= threshold]
             return parsed
             
         if isinstance(parsed, list):
@@ -125,8 +166,20 @@ class LLMClient:
         return data["choices"][0]["message"]["content"]
 
     @staticmethod
-    def _build_prompt(compressed_data: Dict, min_k: int, max_k: int) -> str:
-        return prompts.build_keyword_extraction_prompt(compressed_data, min_k, max_k)
+    def _build_prompt(
+        compressed_data: Dict,
+        min_k: int,
+        max_k: int,
+        skills_limit: Optional[int] = None,
+        tools_limit: Optional[int] = None,
+    ) -> str:
+        return prompts.build_keyword_extraction_prompt(
+            compressed_data,
+            min_k,
+            max_k,
+            skills_limit=skills_limit,
+            tools_limit=tools_limit,
+        )
 
     @staticmethod
     def _parse_keywords(text: str) -> object:

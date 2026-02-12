@@ -132,7 +132,13 @@ class FeishuPusher:
         self.user_id = user_info["user_id"]
         return self.user_id
 
-    def push_keywords(self, keywords: Union[List[Dict], Dict[str, List]], title_suffix: str = "") -> bool:
+    def push_keywords(
+        self,
+        keywords: Union[List[Dict], Dict[str, List]],
+        title_suffix: str = "",
+        skills_limit: Optional[int] = None,
+        tools_limit: Optional[int] = None,
+    ) -> bool:
         """
         Push extracted keywords to Feishu.
         Supports both legacy list format and new structured dict format.
@@ -145,7 +151,7 @@ class FeishuPusher:
         # Prepare message content based on structure
         if isinstance(keywords, dict) and ("skills_interests" in keywords or "tools_platforms" in keywords):
             # Helper to filter and sort
-            def _process_items(items):
+            def _process_items(items, limit: Optional[int]):
                 valid = []
                 for item in items:
                     level = str(item.get("level", "pass")).lower()
@@ -161,11 +167,13 @@ class FeishuPusher:
                 
                 # Rule 2: Sort by weight desc, take Top 10
                 valid.sort(key=lambda x: x.get("weight", 0), reverse=True)
-                return valid[:10]
+                if limit is None:
+                    limit = 10
+                return valid[:limit]
 
             # New structured format
-            skills = _process_items(keywords.get("skills_interests", []))
-            tools = _process_items(keywords.get("tools_platforms", []))
+            skills = _process_items(keywords.get("skills_interests", []), skills_limit)
+            tools = _process_items(keywords.get("tools_platforms", []), tools_limit)
             
             content_lines = [
                 f"📊 **User Interest Analysis Report{title_suffix}**",

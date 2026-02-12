@@ -152,8 +152,10 @@ def run_analysis(config: AppConfig, days: int) -> int:
     default_max = int(llm_cfg.get("keyword_max", 20))
     if days <= 1:
         max_k = 5
+        skills_limit, tools_limit = config.llm_topn_limits(days=days, default_skills=5, default_tools=3)
     else:
         max_k = 10
+        skills_limit, tools_limit = config.llm_topn_limits(days=days, default_skills=10, default_tools=5)
     
     # Override if config explicitly forces something else? 
     # User requested: 1-day -> 5, 7-day -> 10.
@@ -163,11 +165,23 @@ def run_analysis(config: AppConfig, days: int) -> int:
         self_consistency_runs = int(llm_cfg.get("self_consistency_runs", 1) or 1)
         runs = []
         if self_consistency_runs <= 1:
-            keywords = llm_client.extract_keywords(compressed_data, min_k=min_k, max_k=max_k)
+            keywords = llm_client.extract_keywords(
+                compressed_data,
+                min_k=min_k,
+                max_k=max_k,
+                skills_limit=skills_limit,
+                tools_limit=tools_limit,
+            )
         else:
             keywords = None
             for _ in range(self_consistency_runs):
-                run_keywords = llm_client.extract_keywords(compressed_data, min_k=min_k, max_k=max_k)
+                run_keywords = llm_client.extract_keywords(
+                    compressed_data,
+                    min_k=min_k,
+                    max_k=max_k,
+                    skills_limit=skills_limit,
+                    tools_limit=tools_limit,
+                )
                 runs.append(run_keywords)
             # Use the last run as primary, but compute consistency across runs
             keywords = runs[-1] if runs else None
@@ -224,7 +238,12 @@ def run_analysis(config: AppConfig, days: int) -> int:
     # 优先使用配置的webhook
     if webhook_url:
         pusher = FeishuPusher(mode="bot", webhook_url=webhook_url)
-        pusher.push_keywords(keywords, title_suffix=f" (Past {days} Days)")
+        pusher.push_keywords(
+            keywords,
+            title_suffix=f" (Past {days} Days)",
+            skills_limit=skills_limit,
+            tools_limit=tools_limit,
+        )
         if feishu_account:
             print(f"[Step1] Feishu push sent (account: {feishu_account})")
         else:
@@ -243,7 +262,12 @@ def run_analysis(config: AppConfig, days: int) -> int:
             else:
                 try:
                     pusher = FeishuPusher(mode="app", app_id=app_id, app_secret=app_secret, email=email, user_id=open_id, mobile=mobile)
-                    pusher.push_keywords(keywords, title_suffix=f" (Past {days} Days)")
+                    pusher.push_keywords(
+                        keywords,
+                        title_suffix=f" (Past {days} Days)",
+                        skills_limit=skills_limit,
+                        tools_limit=tools_limit,
+                    )
                     print(f'[Step1] Feishu push sent via App (Target: {email or mobile or open_id})')
                 except Exception as e:
                     print(f"[Step1] Feishu App push failed: {e}")

@@ -1,11 +1,21 @@
 import json
-from typing import Dict
+from typing import Dict, Optional
 
-def build_keyword_extraction_prompt(compressed_data: Dict, min_k: int, max_k: int) -> str:
+def build_keyword_extraction_prompt(
+    compressed_data: Dict,
+    min_k: int,
+    max_k: int,
+    skills_limit: Optional[int] = None,
+    tools_limit: Optional[int] = None,
+) -> str:
     """
     Constructs the prompt for extracting keywords from user activity data.
     """
     data_preview = json.dumps(compressed_data, ensure_ascii=False, indent=2)[:8000]
+    if skills_limit is None:
+        skills_limit = max_k // 2
+    if tools_limit is None:
+        tools_limit = max_k // 2
     return (
         "You are an expert career counselor. Analyze the provided user activity data to identify professional skills and interests.\n"
         "The data is grouped into 'web' (browser history) and 'apps' (active applications).\n\n"
@@ -25,8 +35,9 @@ def build_keyword_extraction_prompt(compressed_data: Dict, min_k: int, max_k: in
         "   - EXAMPLES: 'Visual Studio Code', 'GitHub', 'BOSS直聘', '知乎', 'n8n.io', 'Chrome', 'Feishu', 'Trae AI'\n\n"
         "**Rules**:\n"
         "1. **Ignore Noise**: Strictly ignore system process names (e.g., 'exe', 'msedge', 'cmd') and generic terms (e.g., 'Home', 'Search').\n"
-        "2. **Merge Concepts**: If you see 'Python 3.9' and 'Python Script', output 'Python'.\n"
-        "3. **No Overlap**: A keyword cannot exist in both categories. Decide which one fits best.\n\n"
+        "2. **Container Constraint**: If a Tool is a generic container (Browser/IDE/Terminal), list it ONLY under 'Tools & Platforms', NEVER under 'Skills & Interests'.\n"
+        "3. **Merge Concepts**: If you see 'Python 3.9' and 'Python Script', output 'Python'.\n"
+        "4. **No Overlap**: A keyword cannot exist in both categories. Decide which one fits best.\n\n"
         f"**Output Requirement**:\n"
         f"- Return JSON only with this structure:\n"
         "  {\n"
@@ -34,6 +45,6 @@ def build_keyword_extraction_prompt(compressed_data: Dict, min_k: int, max_k: in
         "    \"tools_platforms\": [{\"name\": str, \"weight\": float}]\n"
         "  }\n"
         "- Weights (0.0-1.0) should reflect relevance/duration.\n"
-        f"- Limit: Top {max_k // 2} items per category.\n\n"
+        f"- Limits: Skills & Interests Top {skills_limit}; Tools & Platforms Top {tools_limit}.\n\n"
         f"DATA:\n{data_preview}"
     )
