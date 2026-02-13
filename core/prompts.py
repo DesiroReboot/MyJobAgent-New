@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 def build_keyword_extraction_prompt(
     compressed_data: Dict,
@@ -46,5 +46,32 @@ def build_keyword_extraction_prompt(
         "  }\n"
         "- Weights (0.0-1.0) should reflect relevance/duration.\n"
         f"- Limits: Skills & Interests Top {skills_limit}; Tools & Platforms Top {tools_limit}.\n\n"
+        f"DATA:\n{data_preview}"
+    )
+
+
+def build_chatbot_keyword_prompt(
+    chat_sessions: List[Dict],
+    skills_limit: int = 10,
+    tools_limit: int = 3,
+) -> str:
+    data_preview = json.dumps(chat_sessions, ensure_ascii=False, indent=2)[:8000]
+    return (
+        "You are an expert analyst. Extract professional skills and interests from chat session summaries.\n\n"
+        "**Goal**: Identify the user's real work/learning topics reflected in the sessions.\n"
+        "- Treat the chatbot domain as a Tool/Platform (The Via).\n"
+        "- Extract Skills/Interests (The What) from the session text only.\n\n"
+        "**Rules**:\n"
+        "1. Output MUST be JSON only.\n"
+        "2. Each skill MUST include a short evidence_quote that appears verbatim in compressed_text.\n"
+        "3. Avoid generic words (e.g., 'AI', 'help', 'question'). Prefer specific technologies/tasks/issues.\n"
+        "4. No overlap between Skills and Tools.\n\n"
+        "**Output Requirement**:\n"
+        "  {\n"
+        "    \"skills_interests\": [{\"name\": str, \"weight\": float, \"evidence_quote\": str, \"source_domain\": str}],\n"
+        "    \"tools_platforms\": [{\"name\": str, \"weight\": float}]\n"
+        "  }\n"
+        "- Weights (0.0-1.0) reflect relative importance within chatbot sessions only.\n"
+        f"- Limits: Skills Top {skills_limit}; Tools Top {tools_limit}.\n\n"
         f"DATA:\n{data_preview}"
     )

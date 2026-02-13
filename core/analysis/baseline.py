@@ -1,4 +1,4 @@
-﻿import re
+import re
 from typing import Dict, List, Set
 
 
@@ -19,6 +19,24 @@ def build_baseline_keywords(compressed_data: Dict, limit: int = 50) -> Set[str]:
     """
     Build a baseline keyword set using simple token frequency.
     """
+    chat_token_weight = 0.4
+    if isinstance(compressed_data, dict):
+        analysis_cfg = compressed_data.get("analysis", {}) or {}
+        token_weights = analysis_cfg.get("token_weights", {}) if isinstance(analysis_cfg, dict) else {}
+        if isinstance(token_weights, dict) and "chat_sessions" in token_weights:
+            try:
+                chat_token_weight = float(token_weights.get("chat_sessions"))
+            except Exception:
+                chat_token_weight = 0.4
+        else:
+            chatbot_cfg = compressed_data.get("chatbot", {}) or {}
+            if isinstance(chatbot_cfg, dict) and "token_weight" in chatbot_cfg:
+                try:
+                    chat_token_weight = float(chatbot_cfg.get("token_weight"))
+                except Exception:
+                    chat_token_weight = 0.4
+    chat_token_weight = max(0.0, min(5.0, float(chat_token_weight)))
+
     counter: Dict[str, float] = {}
     web = compressed_data.get("web", {}) if isinstance(compressed_data, dict) else {}
     for stats in web.values():
@@ -40,6 +58,17 @@ def build_baseline_keywords(compressed_data: Dict, limit: int = 50) -> Set[str]:
             if len(t) <= 1 or t in STOPWORDS:
                 continue
             counter[t] = counter.get(t, 0.0) + 0.4
+
+    chat_sessions = compressed_data.get("chat_sessions", []) if isinstance(compressed_data, dict) else []
+    if isinstance(chat_sessions, list):
+        for sess in chat_sessions:
+            if not isinstance(sess, dict):
+                continue
+            text = str(sess.get("compressed_text", "") or "")
+            for t in _tokenize(text):
+                if len(t) <= 1 or t in STOPWORDS:
+                    continue
+                counter[t] = counter.get(t, 0.0) + chat_token_weight
 
     if not counter:
         return set()

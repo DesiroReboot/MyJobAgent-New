@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import time
 from pathlib import Path
@@ -238,6 +238,14 @@ class FeishuPusher:
             return self._push_as_bot(text_content)
         else:
             return self._push_as_app(text_content)
+
+    def push_text(self, text: str) -> bool:
+        text = str(text or "")
+        if not text.strip():
+            return False
+        if self.mode == "bot":
+            return self._push_as_bot(text)
+        return self._push_as_app(text)
 
     def _push_as_bot(self, text: str) -> bool:
         """使用群机器人推送消息"""

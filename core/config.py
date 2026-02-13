@@ -1,7 +1,7 @@
 import os
 import json
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 
 def resolve_config_path(config_path: str) -> Path:
@@ -157,6 +157,86 @@ class AppConfig:
 
     def output_config(self) -> Dict:
         return self.section("output")
+
+    def chatbot_config(self) -> Dict:
+        return self.section("chatbot")
+
+    def feishu_inbox_config(self) -> Dict:
+        return self.section("feishu_inbox")
+
+    def feishu_inbox_enabled(self, default: bool = False) -> bool:
+        val = self.feishu_inbox_config().get("enabled", default)
+        return bool(val)
+
+    def feishu_inbox_download_dir(self, default: str = "") -> str:
+        path = str(self.feishu_inbox_config().get("download_dir", default) or "").strip()
+        return self.resolve_path(path) if path else ""
+
+    def feishu_inbox_sessions_out(self, default: str = "") -> str:
+        path = str(self.feishu_inbox_config().get("sessions_out", default) or "").strip()
+        return self.resolve_path(path) if path else ""
+
+    def chatbot_enabled(self, default: bool = False) -> bool:
+        val = self.chatbot_config().get("enabled", default)
+        return bool(val)
+
+    def chatbot_sessions_file(self, default: str = "") -> str:
+        path = str(self.chatbot_config().get("sessions_file", default) or "").strip()
+        if not path:
+            return ""
+        return self.resolve_path(path)
+
+    def chatbot_max_chars(self, default: int = 6000) -> int:
+        try:
+            return int(self.chatbot_config().get("max_chars", default))
+        except Exception:
+            return default
+
+    def chatbot_days(self, default: int = 7) -> int:
+        try:
+            return int(self.chatbot_config().get("days", default))
+        except Exception:
+            return default
+
+    def chatbot_sessions_out(self, default: str = "") -> str:
+        path = str(self.chatbot_config().get("sessions_out", default) or "").strip()
+        if not path:
+            return ""
+        return self.resolve_path(path)
+
+    def chatbot_pool_seconds_per_session(self, default: int = 300) -> int:
+        try:
+            return int(self.chatbot_config().get("pool_seconds_per_session", default))
+        except Exception:
+            return default
+
+    def chatbot_token_weight(self, default: float = 0.4) -> float:
+        try:
+            return float(self.chatbot_config().get("token_weight", default))
+        except Exception:
+            return float(default)
+
+    def chatbot_sources(self) -> List[Dict]:
+        cfg = self.chatbot_config().get("sources", [])
+        if not isinstance(cfg, list):
+            return []
+        out: List[Dict] = []
+        for item in cfg:
+            if not isinstance(item, dict):
+                continue
+            t = str(item.get("type", "") or "").strip().lower()
+            if not t:
+                continue
+            norm = dict(item)
+            norm["type"] = t
+            if t == "filesystem":
+                p = str(norm.get("path", "") or "").strip()
+                norm["path"] = self.resolve_path(p) if p else ""
+            if t == "cherrystudio":
+                d = str(norm.get("data_dir", "") or "").strip()
+                norm["data_dir"] = self.resolve_path(d) if d else ""
+            out.append(norm)
+        return out
 
     def feishu_webhook(self) -> Tuple[str, str]:
         cfg = self.section("feishu")

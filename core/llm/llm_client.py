@@ -77,6 +77,70 @@ class LLMClient:
         fallback = self._rule_based_keywords(compressed_data, min_k, max_k)
         return fallback
 
+    def extract_chatbot_keywords(
+        self,
+        chat_sessions: List[Dict],
+        skills_limit: int = 10,
+        tools_limit: int = 3,
+    ) -> Dict:
+        if not chat_sessions:
+            return {"skills_interests": [], "tools_platforms": []}
+
+        prompt = prompts.build_chatbot_keyword_prompt(
+            chat_sessions=chat_sessions,
+            skills_limit=skills_limit,
+            tools_limit=tools_limit,
+        )
+
+        combined_text = "\n".join([str(s.get("compressed_text", "") or "") for s in chat_sessions])
+        try:
+            text = self._call_llm(prompt)
+            parsed = self._parse_keywords(text)
+            parsed = self._filter_keywords(parsed, threshold=0.05)
+
+            if isinstance(parsed, dict) and ("skills_interests" in parsed or "tools_platforms" in parsed):
+                skills = parsed.get("skills_interests", []) or []
+                validated = []
+                for item in skills:
+                    quote = str(item.get("evidence_quote", "") or "").strip()
+                    if quote and quote in combined_text:
+                        validated.append(item)
+                parsed["skills_interests"] = validated
+                parsed["tools_platforms"] = parsed.get("tools_platforms", []) or []
+                return parsed
+        except Exception as e:
+            print(f"[WARNING] Chatbot LLM extraction failed: {e}")
+
+        stop = {
+            "the", "and", "for", "with", "from", "that", "this", "you", "your", "are",
+            "how", "what", "why", "when", "where", "use", "using", "into", "over", "new",
+            "教程", "下载", "官网", "登录", "注册", "配置", "安装", "使用", "指南", "文档",
+        }
+        counter = {}
+        tokens = re.split(r"[^A-Za-z0-9\u4e00-\u9fa5]+", combined_text)
+        for t in tokens:
+            t = t.strip().lower()
+            if not t or t in stop or len(t) <= 1:
+                continue
+            counter[t] = counter.get(t, 0.0) + 1.0
+
+        sorted_items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+        top = sorted_items[: max(1, skills_limit)]
+        max_count = max([v for _, v in top] or [1.0])
+        skills = [{"name": k, "weight": (v / max_count if max_count else 0.5)} for k, v in top]
+
+        domain_counter = {}
+        for s in chat_sessions:
+            d = str(s.get("domain", "") or "").strip()
+            if not d:
+                continue
+            domain_counter[d] = domain_counter.get(d, 0) + 1
+        tool_items = sorted(domain_counter.items(), key=lambda kv: (-kv[1], kv[0]))[: max(1, tools_limit)]
+        max_dc = max([v for _, v in tool_items] or [1])
+        tools = [{"name": d, "weight": (c / max_dc if max_dc else 0.5)} for d, c in tool_items]
+
+        return {"skills_interests": skills, "tools_platforms": tools}
+
     @classmethod
     def _filter_keywords(cls, parsed: object, threshold: float = 0.05) -> object:
         if not parsed:

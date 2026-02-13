@@ -49,6 +49,43 @@
     },
     "webhook_url": ""
   },
+  "feishu_inbox": {
+    "enabled": false,
+    "download_dir": "",
+    "sessions_out": "../logs/chat_sessions.jsonl",
+    "max_bytes": 104857600,
+    "accept_ext": [".zip", ".json", ".txt", ".md"],
+    "max_chars": 6000,
+    "domain_default": "chatgpt.com",
+    "domain_rules": {
+      "chatgpt": "chatgpt.com",
+      "claude": "claude.ai",
+      "gemini": "gemini.google.com",
+      "deepseek": "chat.deepseek.com"
+    },
+    "state_file": "../logs/feishu_inbox_state.json"
+  },
+  "chatbot": {
+    "enabled": false,
+    "days": 7,
+    "max_chars": 6000,
+    "sessions_file": "",
+    "sessions_out": "../logs/chat_sessions_auto.jsonl",
+    "pool_seconds_per_session": 300,
+    "token_weight": 0.4,
+    "sources": [
+      {
+        "type": "filesystem",
+        "path": "E:\\AI-Projects\\Chat_Data\\Gemini",
+        "domain": "chatshare.biz"
+      },
+      {
+        "type": "cherrystudio",
+        "domain": "cherrystudio",
+        "data_dir": ""
+      }
+    ]
+  },
   "output": {
     "wordcloud_file": "wordcloud.html"
   }

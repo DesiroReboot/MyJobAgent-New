@@ -15,6 +15,9 @@ from analysis.auditor import annotate_keywords
 from visualization.wordcloud import WordCloudGenerator
 from pusher.feishu_pusher import FeishuPusher
 from storage.event_store import EventStore
+from chat.ingest import load_chat_sessions_file, save_chat_sessions_jsonl
+from chat.merge import merge_keyword_payloads
+from chat.sources import collect_chat_sessions
 
 
 def load_env() -> None:
@@ -50,8 +53,7 @@ def ensure_output_path(path_str: str) -> str:
 import time
 import datetime
 from typing import Optional
-
-def run_analysis(config: AppConfig, days: int) -> int:
+def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str] = None) -> int:
     """Run the analysis pipeline once."""
     print(f"[JobInsight] Starting analysis for past {days} days...")
     
@@ -90,6 +92,55 @@ def run_analysis(config: AppConfig, days: int) -> int:
     compressed_data = DataCleaner.compress_data(events)
     web_domains = len(compressed_data.get("web", {}))
     print(f"[Step1] Domains after compression: {web_domains}")
+    chatbot_pool_seconds = int((compressed_data.get("chatbot", {}) or {}).get("pool_seconds", 0) or 0)
+    try:
+        chatbot_cfg = compressed_data.get("chatbot", {}) if isinstance(compressed_data, dict) else {}
+        if not isinstance(chatbot_cfg, dict):
+            chatbot_cfg = {}
+        chatbot_cfg["token_weight"] = float(config.chatbot_token_weight(0.4))
+        compressed_data["chatbot"] = chatbot_cfg
+    except Exception:
+        pass
+
+    chat_sessions = []
+    sessions_path = str(chat_sessions_file or "").strip()
+    auto_sources = config.chatbot_sources() if config.chatbot_enabled(False) else []
+    auto_out = config.chatbot_sessions_out("") if config.chatbot_enabled(False) else ""
+    chat_days = min(days, config.chatbot_days(7)) if config.chatbot_enabled(False) else days
+    chat_max_chars = config.chatbot_max_chars(6000)
+
+    if not sessions_path and auto_sources and auto_out:
+        p = Path(auto_out)
+        if p.exists():
+            sessions_path = auto_out
+        else:
+            try:
+                sessions, results = collect_chat_sessions(sources=auto_sources, days=int(chat_days), max_chars=int(chat_max_chars))
+                save_chat_sessions_jsonl(sessions, auto_out)
+                chat_sessions = [s.to_dict() for s in sessions]
+                compressed_data["chat_sessions"] = chat_sessions
+                print(f"[Chat] Sessions collected: {len(chat_sessions)}")
+                for r in results:
+                    t = str((r.source or {}).get("type", "") or "")
+                    d = str((r.source or {}).get("domain", "") or "")
+                    print(f"[Chat] source={t} domain={d} sessions={len(r.sessions)} errors={len(r.errors)}")
+                    for e in r.errors[:3]:
+                        print(f"[Chat]   error: {e}")
+            except Exception as e:
+                print(f"[Chat] Collect failed: {e}")
+                chat_sessions = []
+
+    if not chat_sessions and not sessions_path and config.chatbot_enabled(False):
+        sessions_path = config.chatbot_sessions_file("")
+
+    if not chat_sessions and sessions_path:
+        try:
+            chat_sessions = load_chat_sessions_file(sessions_path)
+            compressed_data["chat_sessions"] = chat_sessions
+            print(f"[Chat] Sessions loaded: {len(chat_sessions)}")
+        except Exception as e:
+            print(f"[Chat] Failed to load sessions: {e}")
+            chat_sessions = []
 
     llm_cfg = config.llm_config()
     provider = llm_cfg.get("provider", "zhipu")
@@ -180,6 +231,66 @@ def run_analysis(config: AppConfig, days: int) -> int:
 
     print(f"[Step1] Keywords extracted: {_count_keywords(keywords)}")
 
+    if chat_sessions:
+        try:
+            meta = compressed_data.get("meta", {}) if isinstance(compressed_data, dict) else {}
+            active_total = int(meta.get("total_seconds", 0) or 0) - int(meta.get("afk_seconds", 0) or 0)
+            max_active_total = max(0, int(active_total))
+            if chatbot_pool_seconds > 0:
+                effective_chatbot_pool_seconds = int(chatbot_pool_seconds)
+            else:
+                per_session_pool = int(config.chatbot_pool_seconds_per_session(300) or 0)
+                session_count = int(len(chat_sessions) or 0)
+                if max_active_total <= 0 or per_session_pool <= 0 or session_count <= 0:
+                    effective_chatbot_pool_seconds = 0
+                else:
+                    if session_count > (max_active_total // per_session_pool + 1):
+                        effective_chatbot_pool_seconds = max_active_total
+                    else:
+                        est_pool = per_session_pool * session_count
+                        effective_chatbot_pool_seconds = min(int(est_pool), max_active_total)
+
+            chatbot_keywords = llm_client.extract_chatbot_keywords(
+                chat_sessions=chat_sessions,
+                skills_limit=skills_limit,
+                tools_limit=min(3, tools_limit),
+            )
+            if isinstance(chatbot_keywords, dict) and not (chatbot_keywords.get("tools_platforms") or []):
+                domains = (compressed_data.get("chatbot", {}) or {}).get("domains", {}) if isinstance(compressed_data, dict) else {}
+                domain_items = []
+                if isinstance(domains, dict) and domains:
+                    pairs = []
+                    for d, stats in domains.items():
+                        try:
+                            sec = int((stats.get("dur", {}) or {}).get("active_seconds", 0) or 0)
+                        except Exception:
+                            sec = 0
+                        d = str(d or "").strip()
+                        if d and sec > 0:
+                            pairs.append((d, sec))
+                    pairs.sort(key=lambda x: (-x[1], x[0]))
+                    max_sec = max([s for _, s in pairs] or [1])
+                    for d, sec in pairs[: min(5, len(pairs))]:
+                        domain_items.append({"name": d, "weight": float(sec) / float(max_sec) if max_sec else 0.5})
+                chatbot_keywords["tools_platforms"] = domain_items
+            non_chat_total = max(0, int(active_total) - int(effective_chatbot_pool_seconds))
+
+            base_payload = keywords
+            if isinstance(base_payload, list):
+                base_payload = {"skills_interests": base_payload, "tools_platforms": []}
+            if not isinstance(base_payload, dict):
+                base_payload = {"skills_interests": [], "tools_platforms": []}
+
+            keywords = merge_keyword_payloads(
+                base_payload=base_payload,
+                chatbot_payload=chatbot_keywords,
+                non_chat_total_seconds=non_chat_total,
+                chatbot_pool_seconds=effective_chatbot_pool_seconds,
+            )
+            print(f"[Chat] Keywords merged: {_count_keywords(keywords)}")
+        except Exception as e:
+            print(f"[Chat] Merge failed: {e}")
+
     # Annotate keywords with evidence/scores/level (2A)
     consistency_runs = []
     if isinstance(runs, list) and runs:
@@ -260,6 +371,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="JobInsight Step 1 MVP")
     parser.add_argument("--days", type=int, default=None, help="Days of data to analyze")
     parser.add_argument("--config", type=str, default="config.json", help="Path to config.json")
+    parser.add_argument("--chat-sessions", type=str, default="", help="Path to chatbot sessions (.jsonl/.json)")
     parser.add_argument("-test", "--test", action="store_true", help="Run immediately (bypass scheduler)")
     args = parser.parse_args()
 
@@ -275,7 +387,7 @@ def main() -> int:
     if args.test or not enabled:
         # Run immediately
         days = args.days if args.days is not None else config.collector_days(7)
-        return run_analysis(config, days)
+        return run_analysis(config, days, chat_sessions_file=args.chat_sessions)
     else:
         # Run scheduler
         target_time = schedule_cfg.get("time", "09:00")

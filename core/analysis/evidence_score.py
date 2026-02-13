@@ -47,6 +47,32 @@ def build_title_entries(compressed_data: Dict) -> List[Dict]:
         if title:
             entries.append({"title": title, "count": 1, "duration": float(sample.get("duration", 0) or 0)})
 
+    chat_sessions = compressed_data.get("chat_sessions", []) if isinstance(compressed_data, dict) else []
+    chatbot_pool = 0
+    try:
+        chatbot_pool = int((compressed_data.get("chatbot", {}) or {}).get("pool_seconds", 0) or 0)
+    except Exception:
+        chatbot_pool = 0
+
+    if isinstance(chat_sessions, list) and chat_sessions:
+        est_session_duration = float(chatbot_pool) / float(len(chat_sessions)) if chatbot_pool > 0 else 0.0
+        for sess in chat_sessions:
+            if not isinstance(sess, dict):
+                continue
+            domain = str(sess.get("domain", "") or "").strip()
+            if domain:
+                entries.append({"title": domain, "count": 1, "duration": est_session_duration})
+            text = str(sess.get("compressed_text", "") or "").strip()
+            if not text:
+                continue
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            lines = lines[:12]
+            if not lines:
+                continue
+            per_line_dur = est_session_duration / float(len(lines)) if (est_session_duration > 0 and len(lines) > 0) else 0.0
+            for line in lines:
+                entries.append({"title": line[:500], "count": 1, "duration": per_line_dur})
+
     return entries
 
 

@@ -241,6 +241,7 @@ class DataCleaner:
     @classmethod
     def compress_data(cls, aw_records: List) -> Dict:
         domain_stats: Dict = {}
+        chatbot_domain_stats: Dict = {}
         # New: Group by App Name, aggregate duration, collect unique titles (0/1 logic)
         app_stats: Dict = {}
         
@@ -276,21 +277,22 @@ class DataCleaner:
                 if is_chatbot:
                     clean_title = f"AI Assistance Session ({domain})"
 
-                if domain not in domain_stats:
-                    domain_stats[domain] = {
+                target_map = chatbot_domain_stats if is_chatbot else domain_stats
+                if domain not in target_map:
+                    target_map[domain] = {
                         "cnt": {"aw_events": 0},
                         "dur": {"active_seconds": 0},
                         "title_samples": [],
                         "raw_titles_with_meta": [],
                     }
 
-                domain_stats[domain]["cnt"]["aw_events"] += 1
-                domain_stats[domain]["dur"]["active_seconds"] += duration
+                target_map[domain]["cnt"]["aw_events"] += 1
+                target_map[domain]["dur"]["active_seconds"] += duration
 
-                if len(domain_stats[domain]["title_samples"]) < 3:
-                    domain_stats[domain]["title_samples"].append(clean_title)
+                if len(target_map[domain]["title_samples"]) < 3:
+                    target_map[domain]["title_samples"].append(clean_title)
 
-                domain_stats[domain]["raw_titles_with_meta"].append(
+                target_map[domain]["raw_titles_with_meta"].append(
                     {"title": clean_title, "visit_count": 1, "duration": record.duration}
                 )
 
@@ -325,21 +327,25 @@ class DataCleaner:
                 key = (app, title)
                 audio_agg[key] += duration
 
-        for domain in domain_stats:
-            seen = set()
-            unique_samples = []
-            for title in domain_stats[domain]["title_samples"]:
-                if title and title not in seen:
-                    seen.add(title)
-                    unique_samples.append(title)
-            domain_stats[domain]["title_samples"] = unique_samples
+        def _finalize_domain_stats(stats_map: Dict) -> None:
+            for domain in stats_map:
+                seen = set()
+                unique_samples = []
+                for title in stats_map[domain]["title_samples"]:
+                    if title and title not in seen:
+                        seen.add(title)
+                        unique_samples.append(title)
+                stats_map[domain]["title_samples"] = unique_samples
 
-        for domain, stats in domain_stats.items():
-            title_freq = Counter()
-            for item in stats["raw_titles_with_meta"]:
-                title_freq[item["title"]] += 1
-            stats["title_freq"] = dict(title_freq)
-            del stats["raw_titles_with_meta"]
+            for domain, stats in stats_map.items():
+                title_freq = Counter()
+                for item in stats["raw_titles_with_meta"]:
+                    title_freq[item["title"]] += 1
+                stats["title_freq"] = dict(title_freq)
+                del stats["raw_titles_with_meta"]
+
+        _finalize_domain_stats(domain_stats)
+        _finalize_domain_stats(chatbot_domain_stats)
 
         # Format app stats for output
         # Convert sets to lists and sort by app duration
@@ -377,6 +383,13 @@ class DataCleaner:
                 "afk_ratio": round(afk_seconds / total_seconds, 4) if total_seconds else 0.0,
             },
             "web": domain_stats,
+            "chatbot": {
+                "pool_seconds": sum(
+                    int(stats.get("dur", {}).get("active_seconds", 0) or 0)
+                    for stats in chatbot_domain_stats.values()
+                ),
+                "domains": chatbot_domain_stats,
+            },
             "non_web_samples": {
                 "window": formatted_apps,  # Now uses App-Grouped structure
                 "audio": top_samples(audio_agg),
