@@ -7,14 +7,23 @@ CORE_DIR = Path(__file__).resolve().parents[1]
 if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+
 from analysis.auditor import annotate_keywords
 from chat.ingest import ingest_chat_sessions, save_chat_sessions_jsonl, select_recent_session_files
 from chat.sources import collect_chat_sessions
 from config import AppConfig, resolve_api_key
 from llm.llm_client import create_llm_client
+from chat.obsidian_export import export_sessions_per_session
 
 
 def main(argv: list[str] | None = None) -> int:
+    if load_dotenv:
+        load_dotenv()
+
     parser = argparse.ArgumentParser(description="Chat session tools")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -40,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     collect_p.add_argument("--out", type=str, default="", help="Override output .jsonl sessions file path")
     collect_p.add_argument("--days", type=int, default=0, help="Override days window (0=use config)")
     collect_p.add_argument("--max-chars", type=int, default=0, help="Override max chars per session (0=use config)")
+    collect_p.add_argument("--debug", action="store_true", help="Print debug details for each source")
 
     args = parser.parse_args(argv)
 
@@ -120,16 +130,27 @@ def main(argv: list[str] | None = None) -> int:
         if not out_path:
             raise RuntimeError("chatbot.sessions_out is empty in config.json (or pass --out)")
 
-        sessions, results = collect_chat_sessions(sources=sources, days=days, max_chars=max_chars)
+        sessions, results = collect_chat_sessions(sources=sources, days=days, max_chars=max_chars, debug=bool(args.debug))
         save_chat_sessions_jsonl(sessions, out_path)
         print(f"[Chat] sessions: {len(sessions)}")
         for r in results:
             t = str((r.source or {}).get("type", "") or "")
             d = str((r.source or {}).get("domain", "") or "")
             print(f"[Chat] source={t} domain={d} sessions={len(r.sessions)} errors={len(r.errors)}")
+            if args.debug and getattr(r, "debug", None):
+                try:
+                    print(f"[Chat]   debug: {json.dumps(r.debug, ensure_ascii=False)[:1600]}")
+                except Exception:
+                    print(f"[Chat]   debug: {r.debug}")
             for e in r.errors[:3]:
                 print(f"[Chat]   error: {e}")
         print(f"[Chat] wrote: {out_path}")
+
+        if config.obsidian_enabled(False) and config.obsidian_export_mode("per-session") == "per-session":
+            vault = config.obsidian_vault_path("")
+            if vault:
+                written = export_sessions_per_session(sessions, vault_path=vault, folder=config.obsidian_folder("CherryStudio"))
+                print(f"[Obsidian] wrote: {len(written)}")
         return 0
 
     return 1

@@ -9,7 +9,7 @@
     "api_key": "",
     "model": "qwen-max",
     "timeout": 60,
-    "base_model": "dashscope",
+    "base_model": "deepseek",
     "base_url_examples": {
       "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "deepseek": "https://api.deepseek.com/v1",
@@ -80,11 +80,21 @@
         "domain": "chatshare.biz"
       },
       {
-        "type": "cherrystudio",
+        "type": "obsidian",
+        "domain": "cherrystudio"
+      },
+      {
+        "type": "cherrystudio_backup",
         "domain": "cherrystudio",
-        "data_dir": ""
+        "path": "E:\\CherryStudio\\Chat_Backup"
       }
     ]
+  },
+  "obsidian": {
+    "enabled": true,
+    "vault_path": "E:\\AI-Dialog-Backup",
+    "export_mode": "per-session",
+    "folder": "CherryStudio"
   },
   "output": {
     "wordcloud_file": "wordcloud.html"

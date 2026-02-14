@@ -1,11 +1,17 @@
 import argparse
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     from dotenv import load_dotenv
 except Exception:
     load_dotenv = None
+
+try:
+    from core.pusher.push_gate import compute_feishu_push_decision
+except Exception:
+    from pusher.push_gate import compute_feishu_push_decision
 
 from cleaner.data_cleaner import DataCleaner
 from config import AppConfig, resolve_api_key, resolve_config_path
@@ -18,6 +24,7 @@ from storage.event_store import EventStore
 from chat.ingest import load_chat_sessions_file, save_chat_sessions_jsonl
 from chat.merge import merge_keyword_payloads
 from chat.sources import collect_chat_sessions
+from chat.obsidian_export import export_sessions_per_session
 
 
 def load_env() -> None:
@@ -53,6 +60,8 @@ def ensure_output_path(path_str: str) -> str:
 import time
 import datetime
 from typing import Optional
+
+
 def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str] = None) -> int:
     """Run the analysis pipeline once."""
     print(f"[JobInsight] Starting analysis for past {days} days...")
@@ -126,6 +135,11 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
                     print(f"[Chat] source={t} domain={d} sessions={len(r.sessions)} errors={len(r.errors)}")
                     for e in r.errors[:3]:
                         print(f"[Chat]   error: {e}")
+
+                if config.obsidian_enabled(False) and config.obsidian_export_mode("per-session") == "per-session":
+                    vault = config.obsidian_vault_path("")
+                    if vault:
+                        export_sessions_per_session(sessions, vault_path=vault, folder=config.obsidian_folder("CherryStudio"))
             except Exception as e:
                 print(f"[Chat] Collect failed: {e}")
                 chat_sessions = []
@@ -167,12 +181,38 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
     if not api_key:
         api_key = resolve_api_key(provider, llm_cfg.get("api_key", "")) # Fallback to old logic or empty
 
+    base_url = str(llm_cfg.get("base_url", "") or "").strip()
+    base_url_host = ""
+    if base_url:
+        try:
+            base_url_host = urlparse(base_url).netloc or base_url
+        except Exception:
+            base_url_host = base_url
+
+    print(
+        "[LLM] "
+        + f"provider={provider} "
+        + f"model={llm_cfg.get('model', '')} "
+        + f"base_url={base_url_host or '(empty)'} "
+        + f"env_key={env_key or '(none)'} "
+        + f"key_set={'yes' if bool(api_key) else 'no'}"
+    )
+    if base_url_host:
+        host_lower = base_url_host.lower()
+        provider_lower = str(provider or "").lower()
+        if "deepseek.com" in host_lower and provider_lower != "deepseek":
+            print(f"[LLM][WARNING] base_url points to deepseek but provider={provider_lower}")
+        if "dashscope.aliyuncs.com" in host_lower and provider_lower != "dashscope":
+            print(f"[LLM][WARNING] base_url points to dashscope but provider={provider_lower}")
+        if ("volces.com" in host_lower or "volcengine" in host_lower) and provider_lower != "doubao":
+            print(f"[LLM][WARNING] base_url points to doubao but provider={provider_lower}")
+
     llm_client = create_llm_client(
         provider=provider,
         api_key=api_key,
         model=llm_cfg.get("model", "glm-4.7"),
         timeout=llm_cfg.get("timeout", 60),
-        base_url=llm_cfg.get("base_url", ""),
+        base_url=base_url,
     )
 
     min_k = int(llm_cfg.get("keyword_min", 5))
@@ -194,25 +234,29 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
     try:
         self_consistency_runs = int(llm_cfg.get("self_consistency_runs", 1) or 1)
         runs = []
+        llm_meta = {"used_llm": False, "fallback_used": True, "http_status": None, "error": ""}
         if self_consistency_runs <= 1:
-            keywords = llm_client.extract_keywords(
+            keywords, llm_meta = llm_client.extract_keywords(
                 compressed_data,
                 min_k=min_k,
                 max_k=max_k,
                 skills_limit=skills_limit,
                 tools_limit=tools_limit,
+                return_meta=True,
             )
         else:
             keywords = None
             for _ in range(self_consistency_runs):
-                run_keywords = llm_client.extract_keywords(
+                run_keywords, run_meta = llm_client.extract_keywords(
                     compressed_data,
                     min_k=min_k,
                     max_k=max_k,
                     skills_limit=skills_limit,
                     tools_limit=tools_limit,
+                    return_meta=True,
                 )
                 runs.append(run_keywords)
+                llm_meta = run_meta
             # Use the last run as primary, but compute consistency across runs
             keywords = runs[-1] if runs else None
     except Exception as e:
@@ -231,6 +275,7 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
 
     print(f"[Step1] Keywords extracted: {_count_keywords(keywords)}")
 
+    chatbot_meta = None
     if chat_sessions:
         try:
             meta = compressed_data.get("meta", {}) if isinstance(compressed_data, dict) else {}
@@ -250,10 +295,11 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
                         est_pool = per_session_pool * session_count
                         effective_chatbot_pool_seconds = min(int(est_pool), max_active_total)
 
-            chatbot_keywords = llm_client.extract_chatbot_keywords(
+            chatbot_keywords, chatbot_meta = llm_client.extract_chatbot_keywords(
                 chat_sessions=chat_sessions,
                 skills_limit=skills_limit,
                 tools_limit=min(3, tools_limit),
+                return_meta=True,
             )
             if isinstance(chatbot_keywords, dict) and not (chatbot_keywords.get("tools_platforms") or []):
                 domains = (compressed_data.get("chatbot", {}) or {}).get("domains", {}) if isinstance(compressed_data, dict) else {}
@@ -324,13 +370,25 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
     print(f"[Step1] Wordcloud generated: {wordcloud_file}")
 
     feishu_account, webhook_url = config.feishu_webhook()
+    feishu_cfg = config.section("feishu")
+    push_on_llm_fallback = bool(feishu_cfg.get("push_on_llm_fallback", False))
+
+    keyword_count = _count_keywords(keywords)
+    should_push, title_fallback_suffix, skip_reason = compute_feishu_push_decision(
+        keyword_count=keyword_count,
+        llm_meta=llm_meta,
+        chatbot_meta=chatbot_meta,
+        push_on_llm_fallback=push_on_llm_fallback,
+    )
+    if not should_push:
+        print(f"[Step1] Feishu push skipped: {skip_reason}")
     
     # 优先使用配置的webhook
-    if webhook_url:
+    if webhook_url and should_push:
         pusher = FeishuPusher(mode="bot", webhook_url=webhook_url)
         pusher.push_keywords(
             keywords,
-            title_suffix=f" (Past {days} Days)",
+            title_suffix=f" (Past {days} Days){title_fallback_suffix}",
             skills_limit=skills_limit,
             tools_limit=tools_limit,
         )
@@ -341,7 +399,7 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
     else:
         # 尝试使用App模式
         app_id = config.get_env("FEISHU_APP_ID")
-        if app_id:
+        if app_id and should_push:
             email = config.get_env("FEISHU_EMAIL")
             open_id = config.get_env("FEISHU_OPEN_ID")
             mobile = config.get_env("FEISHU_MOBILES")
@@ -354,7 +412,7 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
                     pusher = FeishuPusher(mode="app", app_id=app_id, app_secret=app_secret, email=email, user_id=open_id, mobile=mobile)
                     pusher.push_keywords(
                         keywords,
-                        title_suffix=f" (Past {days} Days)",
+                        title_suffix=f" (Past {days} Days){title_fallback_suffix}",
                         skills_limit=skills_limit,
                         tools_limit=tools_limit,
                     )
@@ -362,7 +420,8 @@ def run_analysis(config: AppConfig, days: int, chat_sessions_file: Optional[str]
                 except Exception as e:
                     print(f"[Step1] Feishu App push failed: {e}")
         else:
-            print("[Step1] Feishu not configured (neither Webhook nor App ID found), skipping push")
+            if should_push:
+                print("[Step1] Feishu not configured (neither Webhook nor App ID found), skipping push")
 
     return 0
 

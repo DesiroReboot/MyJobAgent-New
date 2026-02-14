@@ -29,6 +29,20 @@ class LLMClient:
         'Microsoft Edge', 'Google Chrome', 'Visual Studio Code', 'VS Code', 'IntelliJ IDEA', 'File Explorer'
     }
 
+    class RequestError(Exception):
+        def __init__(
+            self,
+            message: str,
+            *,
+            status_code: Optional[int] = None,
+            url: str = "",
+            body_excerpt: str = "",
+        ) -> None:
+            super().__init__(message)
+            self.status_code = status_code
+            self.url = url
+            self.body_excerpt = body_excerpt
+
     def extract_keywords(
         self,
         compressed_data: Dict,
@@ -36,6 +50,7 @@ class LLMClient:
         max_k: int = 5,
         skills_limit: Optional[int] = None,
         tools_limit: Optional[int] = None,
+        return_meta: bool = False,
     ) -> Dict:
         """
         Extract keywords from compressed data using LLM.
@@ -49,8 +64,12 @@ class LLMClient:
             skills_limit=skills_limit,
             tools_limit=tools_limit,
         )
+        used_llm = False
+        fallback_used = False
+        meta = {"used_llm": False, "fallback_used": False, "http_status": None, "error": ""}
         try:
             text = self._call_llm(prompt)
+            used_llm = True
             parsed = self._parse_keywords(text)
             
             # Filter low weight items (threshold < 0.05)
@@ -60,6 +79,10 @@ class LLMClient:
             if parsed:
                 # If parsed is a dict (new structure), return it directly
                 if isinstance(parsed, dict) and ("skills_interests" in parsed or "tools_platforms" in parsed):
+                    if return_meta:
+                        meta["used_llm"] = True
+                        meta["fallback_used"] = False
+                        return parsed, meta
                     return parsed
                 
                 # If parsed is a list (legacy structure), return it
@@ -67,14 +90,32 @@ class LLMClient:
                     # Sort legacy list
                     parsed.sort(key=lambda x: x.get("weight", 0), reverse=True)
                     if len(parsed) > max_k:
+                        if return_meta:
+                            meta["used_llm"] = True
+                            meta["fallback_used"] = False
+                            return parsed[:max_k], meta
                         return parsed[:max_k]
+                    if return_meta:
+                        meta["used_llm"] = True
+                        meta["fallback_used"] = False
+                        return parsed, meta
                     return parsed
+            fallback_used = True
+            meta["error"] = "LLM response parsed empty; fallback used"
                     
         except Exception as e:
             print(f"[WARNING] LLM extraction failed: {e}")
+            fallback_used = True
+            meta["error"] = str(e)
+            if isinstance(e, LLMClient.RequestError):
+                meta["http_status"] = e.status_code
             
         # Fallback to rule-based
         fallback = self._rule_based_keywords(compressed_data, min_k, max_k)
+        if return_meta:
+            meta["used_llm"] = bool(used_llm)
+            meta["fallback_used"] = bool(fallback_used)
+            return fallback, meta
         return fallback
 
     def extract_chatbot_keywords(
@@ -82,9 +123,13 @@ class LLMClient:
         chat_sessions: List[Dict],
         skills_limit: int = 10,
         tools_limit: int = 3,
+        return_meta: bool = False,
     ) -> Dict:
         if not chat_sessions:
-            return {"skills_interests": [], "tools_platforms": []}
+            payload = {"skills_interests": [], "tools_platforms": []}
+            if return_meta:
+                return payload, {"used_llm": False, "fallback_used": True, "http_status": None, "error": "no chat_sessions"}
+            return payload
 
         prompt = prompts.build_chatbot_keyword_prompt(
             chat_sessions=chat_sessions,
@@ -93,8 +138,12 @@ class LLMClient:
         )
 
         combined_text = "\n".join([str(s.get("compressed_text", "") or "") for s in chat_sessions])
+        used_llm = False
+        fallback_used = False
+        meta = {"used_llm": False, "fallback_used": False, "http_status": None, "error": ""}
         try:
             text = self._call_llm(prompt)
+            used_llm = True
             parsed = self._parse_keywords(text)
             parsed = self._filter_keywords(parsed, threshold=0.05)
 
@@ -107,9 +156,19 @@ class LLMClient:
                         validated.append(item)
                 parsed["skills_interests"] = validated
                 parsed["tools_platforms"] = parsed.get("tools_platforms", []) or []
+                if return_meta:
+                    meta["used_llm"] = True
+                    meta["fallback_used"] = False
+                    return parsed, meta
                 return parsed
+            fallback_used = True
+            meta["error"] = "LLM response parsed empty; fallback used"
         except Exception as e:
             print(f"[WARNING] Chatbot LLM extraction failed: {e}")
+            fallback_used = True
+            meta["error"] = str(e)
+            if isinstance(e, LLMClient.RequestError):
+                meta["http_status"] = e.status_code
 
         stop = {
             "the", "and", "for", "with", "from", "that", "this", "you", "your", "are",
@@ -139,7 +198,12 @@ class LLMClient:
         max_dc = max([v for _, v in tool_items] or [1])
         tools = [{"name": d, "weight": (c / max_dc if max_dc else 0.5)} for d, c in tool_items]
 
-        return {"skills_interests": skills, "tools_platforms": tools}
+        payload = {"skills_interests": skills, "tools_platforms": tools}
+        if return_meta:
+            meta["used_llm"] = bool(used_llm)
+            meta["fallback_used"] = bool(fallback_used) or True
+            return payload, meta
+        return payload
 
     @classmethod
     def _filter_keywords(cls, parsed: object, threshold: float = 0.05) -> object:
@@ -224,10 +288,46 @@ class LLMClient:
             ],
             "temperature": 0.3,
         }
-        resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            status = None
+            body_excerpt = ""
+            try:
+                if e.response is not None:
+                    status = int(getattr(e.response, "status_code", 0) or 0) or None
+                    body = ""
+                    try:
+                        body = e.response.text or ""
+                    except Exception:
+                        body = ""
+                    body = body.strip()
+                    if body:
+                        body_excerpt = body[:400] + ("..." if len(body) > 400 else "")
+            except Exception:
+                status = None
+                body_excerpt = ""
+
+            hint = ""
+            if status == 401:
+                hint = " Unauthorized(401). Check provider env key, base_url matches the service, and API key belongs to that service."
+            msg = f"LLM request failed: HTTP {status or 'error'} for url={url}.{hint}"
+            if body_excerpt:
+                msg += f" Response: {body_excerpt}"
+            raise LLMClient.RequestError(msg, status_code=status, url=url, body_excerpt=body_excerpt) from e
+        except requests.exceptions.RequestException as e:
+            msg = f"LLM request failed: {type(e).__name__} for url={url}: {e}"
+            raise LLMClient.RequestError(msg, status_code=None, url=url, body_excerpt="") from e
+
+        try:
+            data = resp.json()
+        except Exception as e:
+            raise LLMClient.RequestError(f"LLM response is not valid JSON for url={url}: {e}", url=url) from e
+        try:
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            raise LLMClient.RequestError(f"LLM response missing choices/message for url={url}: {e}", url=url) from e
 
     @staticmethod
     def _build_prompt(

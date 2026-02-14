@@ -112,6 +112,19 @@ def compress_chat_text(
         out_parts.append("CODE BLOCKS:")
         out_parts.extend(code_blocks)
 
+    if not out_parts:
+        fallback: List[str] = []
+        total2 = 0
+        for line in lines[:max_lines]:
+            add_len = len(line) + 1
+            if total2 + add_len > max_chars:
+                break
+            fallback.append(line)
+            total2 += add_len
+        if fallback:
+            out_parts.append("TEXT:")
+            out_parts.extend(fallback)
+
     out = "\n".join(out_parts).strip()
     if len(out) > max_chars:
         out = out[:max_chars].rstrip()

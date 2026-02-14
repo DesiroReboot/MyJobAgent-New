@@ -97,14 +97,20 @@ class AppConfig:
 
     def llm_config(self) -> Dict:
         llm = self.section("llm")
-        base_model = llm.get("base_model", "dashscope")
-        base_url_examples = llm.get("base_url_examples", {})
-        
-        # Resolve base_url from base_model if not explicitly set (or if we strictly use base_model)
-        # User requested: base_url -> base_model logic
-        if base_model in base_url_examples:
-            llm["base_url"] = base_url_examples[base_model]
-        
+        provider = str(llm.get("provider", "") or "").strip().lower()
+        base_model = str(llm.get("base_model", "") or "").strip().lower()
+        base_url_examples = llm.get("base_url_examples", {}) or {}
+
+        base_url = str(llm.get("base_url", "") or "").strip()
+        if not base_url:
+            candidate = ""
+            if provider and provider in base_url_examples:
+                candidate = str(base_url_examples.get(provider, "") or "").strip()
+            elif base_model and base_model in base_url_examples:
+                candidate = str(base_url_examples.get(base_model, "") or "").strip()
+            if candidate:
+                llm["base_url"] = candidate
+
         return llm
 
     def llm_topn_limits(self, days: int, default_skills: int, default_tools: int) -> Tuple[int, int]:
@@ -232,11 +238,42 @@ class AppConfig:
             if t == "filesystem":
                 p = str(norm.get("path", "") or "").strip()
                 norm["path"] = self.resolve_path(p) if p else ""
+            if t == "obsidian":
+                p = str(norm.get("path", "") or "").strip()
+                if not p:
+                    vault = self.obsidian_vault_path("")
+                    folder = self.obsidian_folder("CherryStudio")
+                    if vault and folder:
+                        p = str(Path(vault) / folder)
+                norm["path"] = self.resolve_path(p) if p else ""
             if t == "cherrystudio":
+                m = str(norm.get("mode", "") or "").strip().lower()
+                norm["mode"] = m or "auto"
                 d = str(norm.get("data_dir", "") or "").strip()
                 norm["data_dir"] = self.resolve_path(d) if d else ""
+                db = str(norm.get("db_path", "") or "").strip()
+                norm["db_path"] = self.resolve_path(db) if db else ""
+            if t == "cherrystudio_backup":
+                p = str(norm.get("path", "") or "").strip()
+                norm["path"] = self.resolve_path(p) if p else ""
             out.append(norm)
         return out
+
+    def obsidian_config(self) -> Dict:
+        return self.section("obsidian")
+
+    def obsidian_enabled(self, default: bool = False) -> bool:
+        return bool(self.obsidian_config().get("enabled", default))
+
+    def obsidian_vault_path(self, default: str = "") -> str:
+        path = str(self.obsidian_config().get("vault_path", default) or "").strip()
+        return self.resolve_path(path) if path else ""
+
+    def obsidian_export_mode(self, default: str = "per-session") -> str:
+        return str(self.obsidian_config().get("export_mode", default) or default).strip().lower()
+
+    def obsidian_folder(self, default: str = "CherryStudio") -> str:
+        return str(self.obsidian_config().get("folder", default) or default).strip()
 
     def feishu_webhook(self) -> Tuple[str, str]:
         cfg = self.section("feishu")
